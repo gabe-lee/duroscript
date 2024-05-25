@@ -127,9 +127,12 @@ pub const KIND = enum(u8) {
     ILLEGAL_INTEGER_OVERFLOWS_64_BITS,
     ILLEGAL_INTEGER_NO_SIGNIFICANT_BITS,
     ILLEGAL_FLOAT_TOO_MANY_DOTS,
+    ILLEGAL_IDENT_TOO_LONG,
+    ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
+    ILLEGAL_NUMBER_OVERFLOWS_64_BITS,
 };
 
-const KEYWORD_U64_TABLE = [27]u64{
+pub const KEYWORD_U64_TABLE = [27]u64{
     (A.UNDERSCORE << 56), // _
     ((A.a << 56) | (A.s << 48)), // as
     ((A.i << 56) | (A.n << 48)), // in
@@ -158,7 +161,7 @@ const KEYWORD_U64_TABLE = [27]u64{
     ((A.s << 56) | (A.t << 48) | (A.r << 40) | (A.u << 32) | (A.c << 24) | (A.t << 16)), // struct
     ((A.n << 56) | (A.e << 48) | (A.x << 40) | (A.t << 32) | (A.l << 24) | (A.o << 16) | (A.o << 8) | A.p), // nextloop
 };
-const KEYWORD_U64_SLICES_BY_LEN = [9][]const u64{
+pub const KEYWORD_U64_SLICES_BY_LEN = [9][]const u64{
     KEYWORD_U64_TABLE[0..0], // 0 char slice
     KEYWORD_U64_TABLE[0..1], // 1 char slice
     KEYWORD_U64_TABLE[1..3], // 2 char slice
@@ -169,7 +172,7 @@ const KEYWORD_U64_SLICES_BY_LEN = [9][]const u64{
     KEYWORD_U64_TABLE[26..26], // 7 char slice
     KEYWORD_U64_TABLE[26..27], // 8 char slice
 };
-const KEYWORD_TOKEN_TABLE = [27]KIND{
+pub const KEYWORD_TOKEN_TABLE = [27]KIND{
     KIND.DEFAULT, // _
     KIND.AS, // as
     KIND.IN, // in
@@ -198,7 +201,7 @@ const KEYWORD_TOKEN_TABLE = [27]KIND{
     KIND.STRUCT, // struct
     KIND.NEXT_LOOP, // nextloop
 };
-const KEYWORD_TOKEN_SLICES_BY_LEN = [9][]const KIND{
+pub const KEYWORD_TOKEN_SLICES_BY_LEN = [9][]const KIND{
     KEYWORD_TOKEN_TABLE[0..0], // 0 char slice
     KEYWORD_TOKEN_TABLE[0..1], // 1 char slice
     KEYWORD_TOKEN_TABLE[1..3], // 2 char slice
@@ -209,10 +212,4 @@ const KEYWORD_TOKEN_SLICES_BY_LEN = [9][]const KIND{
     KEYWORD_TOKEN_TABLE[26..26], // 7 char slice
     KEYWORD_TOKEN_TABLE[26..27], // 8 char slice
 };
-const LITERAL_BOOL_TRUE = KEYWORD_U64_TABLE[11];
-
-// [0|..5]
-// [0...5]
-// [0..|5]
-// [0|..|5]
-// <>
+pub const LITERAL_BOOL_TRUE = KEYWORD_U64_TABLE[11];

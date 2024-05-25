@@ -295,7 +295,60 @@ pub fn next_token(self: *Self) LexerError!Token {
         },
         ENC._0...ENC._9 => self.handle_number_literal(token_builder, false, byte_1),
         ENC.A...ENC.UNDERSCORE => {
-            //FIXME handle identifier/keyword tokens
+            var ident_block = BLANK_IDENT;
+            var idx = 0;
+            var offset: u8 = 56;
+            var len: u8 = 1;
+            var idx_add: u8 = 1;
+            ident_block[idx] |= byte_1 << offset;
+            offset -= 8;
+            while (self.more_bytes_in_source()) {
+                const byte_x = self.read_next_byte();
+                switch (byte_x) {
+                    ENC._0...ENC.UNDERSCORE => {
+                        if (len >= 64) {
+                            while (self.more_bytes_in_source()) {
+                                const byte_over = self.read_next_byte();
+                                switch (byte_over) {
+                                    ENC._0...ENC.UNDERSCORE => {},
+                                    else => {
+                                        self.rollback_one_byte();
+                                        return self.finish_token(TKIND.ILLEGAL_IDENT_TOO_LONG, token_builder);
+                                    },
+                                }
+                            }
+                            return self.finish_token(TKIND.ILLEGAL_IDENT_TOO_LONG, token_builder);
+                        }
+                        ident_block[idx] |= byte_x << offset;
+                        offset = ((offset | 64) - 8) & 63;
+                        len += 1;
+                        idx_add += 1;
+                        idx += idx_add >> 3;
+                        idx_add &= 0b0111;
+                    },
+                    else => {
+                        self.rollback_one_byte();
+                        if (len <= 8) {
+                            const possible_keywords = Token.KEYWORD_U64_SLICES_BY_LEN[len];
+                            const possible_tokens = Token.KEYWORD_TOKEN_SLICES_BY_LEN[len];
+                            for (possible_keywords, possible_tokens) |kw, tok| {
+                                if (kw == ident_block[0]) return self.finish_token(tok, token_builder);
+                            }
+                        }
+                        //FIXME save actual keyword to ROM and give token pointer to it
+                        return self.finish_token(TKIND.IDENT, token_builder);
+                    },
+                }
+            }
+            if (len <= 8) {
+                const possible_keywords = Token.KEYWORD_U64_SLICES_BY_LEN[len];
+                const possible_tokens = Token.KEYWORD_TOKEN_SLICES_BY_LEN[len];
+                for (possible_keywords, possible_tokens) |kw, tok| {
+                    if (kw == ident_block[0]) return self.finish_token(tok, token_builder);
+                }
+            }
+            //FIXME save actual keyword to ROM and give token pointer to it
+            return self.finish_token(TKIND.IDENT, token_builder);
         },
         ENC._0...ENC.COMMA => return self.finish_token(TKIND.ILLEGAL_OPERATOR, token_builder),
         else => return self.finish_token(TKIND.ILLEGAL_BYTE, token_builder),
@@ -315,7 +368,7 @@ inline fn finish_integer_literal_token(self: *Self, token_builder: TokenBuilder,
 }
 
 inline fn collect_illegal_alphanumeric_string(self: *Self, token_builder: TokenBuilder, illegal_kind: TKIND) Token {
-    while (self.curr_pos < self.source.len) {
+    while (self.more_bytes_in_source()) {
         const next_byte = self.read_next_byte();
         switch (next_byte) {
             ENC._0...ENC.UNDERSCORE => {},
@@ -329,7 +382,7 @@ inline fn collect_illegal_alphanumeric_string(self: *Self, token_builder: TokenB
 }
 
 inline fn collect_illegal_alphanumeric_string_plus_dot(self: *Self, token_builder: TokenBuilder, illegal_kind: TKIND) Token {
-    while (self.curr_pos < self.source.len) {
+    while (self.more_bytes_in_source()) {
         const next_byte = self.read_next_byte();
         switch (next_byte) {
             ENC._0...ENC.UNDERSCORE, ENC.PERIOD => {},
@@ -343,7 +396,7 @@ inline fn collect_illegal_alphanumeric_string_plus_dot(self: *Self, token_builde
 }
 
 inline fn more_bytes_in_source(self: *Self) bool {
-    return self.curr_pos < self.source.len;
+    return self.more_bytes_in_source();
 }
 
 inline fn handle_number_literal(self: *Self, token_builder: TokenBuilder, negative: bool, byte_1: u8) LexerError!Token {
@@ -356,14 +409,14 @@ inline fn handle_number_literal(self: *Self, token_builder: TokenBuilder, negati
                 var data_value: u64 = 0;
                 var bit_position: u32 = 0;
                 var leading_zeroes = 0;
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const leading_zero = self.read_next_byte();
                     if (leading_zero != ENC._0 or leading_zero != ENC.UNDERSCORE) {
                         self.rollback_one_byte();
                         break;
                     } else if (leading_zero == ENC._0) leading_zeroes += 1;
                 }
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const byte_x = self.read_next_byte();
                     switch (byte_x) {
                         ENC._0...ENC._1 => {
@@ -394,14 +447,14 @@ inline fn handle_number_literal(self: *Self, token_builder: TokenBuilder, negati
                 var data_value: u64 = 0;
                 var bit_position: u32 = 0;
                 var leading_zeroes = 0;
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const leading_zero = self.read_next_byte();
                     if (leading_zero != ENC._0 or leading_zero != ENC.UNDERSCORE) {
                         self.rollback_one_byte();
                         break;
                     } else if (leading_zero == ENC._0) leading_zeroes += 1;
                 }
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const byte_x = self.read_next_byte();
                     switch (byte_x) {
                         ENC._0...ENC._7 => {
@@ -438,14 +491,14 @@ inline fn handle_number_literal(self: *Self, token_builder: TokenBuilder, negati
                 var data_value: u64 = 0;
                 var bit_position: u32 = 0;
                 var leading_zeroes = 0;
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const leading_zero = self.read_next_byte();
                     if (leading_zero != ENC._0 or leading_zero != ENC.UNDERSCORE) {
                         self.rollback_one_byte();
                         break;
                     } else if (leading_zero == ENC._0) leading_zeroes += 1;
                 }
-                while (self.curr_pos < self.source.len) {
+                while (self.more_bytes_in_source()) {
                     const byte_x = ENC.LEXBYTE_TO_HEX[self.read_next_byte()];
                     switch (byte_x) {
                         ENC._0...ENC._F => {
@@ -472,48 +525,130 @@ inline fn handle_number_literal(self: *Self, token_builder: TokenBuilder, negati
                 }
                 return self.finish_integer_literal_token(token_builder, data_value, negative);
             },
-            ENC._0...ENC._9, ENC.PERIOD, ENC.UNDERSCORE => {
+            ENC._0...ENC._9, ENC.PERIOD, ENC.UNDERSCORE, ENC.e, ENC.E => {
                 self.rollback_one_byte();
             },
-            else => {
-                self.rollback_one_byte();
-                return self.finish_integer_literal_token(token_builder, 0, negative);
-            },
+            else => return self.collect_illegal_alphanumeric_string_plus_dot(token_builder, TKIND.ILLEGAL_ALPHANUM_IN_DECIMAL),
         }
     }
-    var data: [2]u64 = [2]u64{ @as(u64, byte_1), 0 };
-    var data_part: usize = 0;
+    var sig_value: u64 = 0;
+    var sig_digits: u64 = 0;
+    var implicit_exp: i64 = 0;
+    var is_float = false;
+    var flt_exp_sub: i64 = 0;
+    var has_exp = false;
+    var neg_exp = false;
+    var sig_int_found = byte_1 != 0;
+    if (sig_int_found) {
+        sig_value = byte_1;
+        sig_digits += 1;
+    }
     switch (byte_2) {
         ENC._0...ENC._9 => {
-            data[data_part] = (data[data_part] * 10) + @as(u64, byte_2);
+            sig_int_found = sig_int_found or (byte_2 != 0);
+            if (sig_int_found) {
+                sig_value = (sig_value *% 10) + @as(u64, byte_2);
+                sig_digits += 1;
+            }
         },
         ENC.PERIOD => {
-            data_part = 1;
+            is_float = true;
+            flt_exp_sub = 1;
         },
-        _ => {},
+        ENC.e, ENC.E => {
+            has_exp = true;
+            if (self.more_bytes_in_source()) {
+                const first_exp_byte = self.read_next_byte();
+                switch (first_exp_byte) {
+                    ENC.MINUS => {
+                        neg_exp = true;
+                    },
+                    ENC.PLUS => {},
+                    else => self.rollback_one_byte(),
+                }
+            }
+        },
+        else => {},
     }
-    while (self.curr_pos < self.source.len) {
+    while (!has_exp and self.more_bytes_in_source()) {
         const byte_x = self.read_next_byte();
         switch (byte_x) {
             ENC._0...ENC._9 => {
-                data[data_part] = (data[data_part] * 10) + @as(u64, byte_2);
+                sig_int_found = sig_int_found or (byte_x != 0);
+                if (sig_int_found) {
+                    if (is_float and byte_x == 0) {
+                        var trailing_zeroes = 1;
+                        while (self.more_bytes_in_source()) {
+                            const byte_xx = self.read_next_byte();
+                            switch (byte_xx) {
+                                ENC._0 => {
+                                    trailing_zeroes += 1;
+                                },
+                                ENC._1...ENC._9 => {
+                                    trailing_zeroes += 1;
+                                    sig_digits += trailing_zeroes;
+                                    implicit_exp -= trailing_zeroes;
+                                    while (trailing_zeroes > 0) {
+                                        sig_value *%= 10;
+                                        trailing_zeroes -= 1;
+                                    }
+                                    sig_value += @as(u64, byte_xx);
+                                    break;
+                                },
+                                else => {
+                                    self.rollback_one_byte();
+                                    break;
+                                },
+                            }
+                        }
+                    } else {
+                        if (sig_digits > 19 or (sig_digits == 19 and ((byte_x <= 5 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5) or (byte_x >= 6 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9)))) {
+                            return self.collect_illegal_alphanumeric_string_plus_dot(token_builder, TKIND.ILLEGAL_NUMBER_OVERFLOWS_64_BITS);
+                        }
+                        sig_value = (sig_value *% 10) + @as(u64, byte_x);
+                        sig_digits += 1;
+                        implicit_exp -= flt_exp_sub;
+                    }
+                }
             },
             ENC.PERIOD => {
-                if (data_part == 1) {
+                if (is_float) {
                     return self.collect_illegal_alphanumeric_string_plus_dot(token_builder, TKIND.ILLEGAL_FLOAT_TOO_MANY_DOTS);
                 }
-                data_part = 1;
+                is_float = true;
+            },
+            ENC.E, ENC.e => {
+                if (has_exp) {
+                    return self.collect_illegal_alphanumeric_string_plus_dot(token_builder, TKIND.ILLEGAL_NUMBER_TOO_MANY_EXPONENTS);
+                }
+                has_exp = true;
+                if (self.more_bytes_in_source()) {
+                    const first_exp_byte = self.read_next_byte();
+                    switch (first_exp_byte) {
+                        ENC.MINUS => {
+                            neg_exp = true;
+                        },
+                        ENC.PLUS => {},
+                        else => self.rollback_one_byte(),
+                    }
+                }
             },
             ENC.UNDERSCORE => {},
             else => {
                 self.rollback_one_byte();
-                if (data_part == 0) return self.finish_integer_literal_token(token_builder, data[0], negative);
-                @panic("float literals not implemented"); //FIXME Handle floating point numbers somehow
+                if (is_float) {
+                    @panic("float literals not implemented"); //FIXME Handle floating point numbers somehow
+                }
+                return self.finish_integer_literal_token(token_builder, sig_value, negative);
             },
         }
     }
-    if (data_part == 0) return self.finish_integer_literal_token(token_builder, data[0], negative);
-    @panic("float literals not implemented"); //FIXME Handle floating point numbers somehow
+    //FIXME implement loop to collect explicit exponent
+    // var explicit_exp: i64 = 0;
+    if (is_float) {
+        @panic("float literals not implemented"); //FIXME Handle floating point numbers somehow
+    }
+    return self.finish_integer_literal_token(token_builder, sig_value, negative);
 }
 
 inline fn finish_token(self: *Self, kind: Token.TokenKind, token_builder: TokenBuilder) Token {
@@ -575,7 +710,7 @@ inline fn is_valid_ident_char_rest(code: u8) bool {
 
 // inline fn scan_over_utf8_until_next_char_match(self: *Self, match_code: u32, include_match_in_token: bool) LexerError!bool {
 //     var found = false;
-//     while (self.curr_pos < self.source.len and !found) {
+//     while (self.more_bytes_in_source() and !found) {
 //         const next_code = try self.read_next_utf8_char();
 //         found = next_code == match_code;
 //     }
@@ -586,7 +721,7 @@ inline fn is_valid_ident_char_rest(code: u8) bool {
 // }
 
 inline fn read_next_byte(self: *Self) u8 {
-    assert(self.curr_pos < self.source.len);
+    assert(self.more_bytes_in_source());
     const val = self.source[self.curr_pos];
     self.next_or_prev_pos = self.curr_pos;
     self.next_or_prev_col = self.curr_col;
@@ -604,7 +739,7 @@ fn read_next_utf8_char(self: *Self) LexerError!u32 {
         self.curr_processed = false;
         return self.curr_code;
     }
-    assert(self.curr_pos < self.source.len);
+    assert(self.more_bytes_in_source());
     self.next_or_prev_pos = self.curr_pos;
     self.next_or_prev_col = self.curr_col;
     self.next_or_prev_row = self.curr_row;
@@ -703,3 +838,9 @@ const TokenBuilder = struct {
 
 const MAX_POSITIVE_I64 = std.math.maxInt(isize);
 const MAX_NEGATIVE_I64 = MAX_POSITIVE_I64 + 1;
+
+const IdentBlock = [8]u64;
+const BLANK_IDENT: IdentBlock = IdentBlock{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+const LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9: u64 = 1844674407370955160;
+const LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5: u64 = 1844674407370955161;
