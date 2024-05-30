@@ -2,15 +2,15 @@ const A = @import("./Ascii.zig");
 
 const Self = @This();
 
-kind: KIND, //u8
+kind: KIND, // u8
+warn: WARN, // u8
 source_key: u16,
 row_start: u32,
 row_end: u32,
 col_start: u32,
 col_end: u32,
 data_val_or_ptr: u64,
-data_len: u32,
-data_bool: bool,
+data_exp_or_len: u32,
 
 pub const KIND = enum(u8) {
     // Meta
@@ -26,12 +26,19 @@ pub const KIND = enum(u8) {
     AS, // T
     // Types
     NONE, // T
-    MAYBE_NONE, // TL
     TYPE, // T
     FLOAT, // T
-    INT, // T
+    U8, // T
+    I8, // T
+    U16, // T
+    I16, // T
+    U32, // T
+    I32, // T
+    U64, // T
+    I64, // T
+    F32, // T
+    F64, // T
     BOOL, // T
-    BYTE, // T
     STRING, // T
     STRUCT, // T
     SLICE, // TL
@@ -41,14 +48,15 @@ pub const KIND = enum(u8) {
     FUNC, // T
     REFERENCE, // TL
     // Literals
-    LIT_STR,
+    LIT_STRING,
     LIT_SUB_STR_BEGIN,
     LIT_SUB_STR_MIDDLE,
     LIT_SUB_STR_END,
-    LIT_INT,
-    LIT_FLT,
+    LIT_INTEGER,
+    LIT_FLOAT,
     LIT_BOOL, // T
     // Operators
+    MAYBE, // TL
     SUBSTITUTE, // TL
     DEREREFENCE, // TL
     ASSIGN, // TL
@@ -107,109 +115,261 @@ pub const KIND = enum(u8) {
     L_SQUARE, // TL
     R_SQUARE, // TL
     ACCESS, // TL
-    ACCESS_MAYBE_NONE, // TL
     FAT_ARROW, // TL
     // Control Flow
-    BRANCH, // T
+    MATCH, // T
+    IF, // T
+    ELSE, // T
     WHILE, // T
-    FOR, // T
+    FOR_EACH, // T
     IN, // T
     BREAK, // T
     NEXT_LOOP, // T
     RETURN, // T
-    //
+    // Illegal
+    ILLEGAL, // TL
+};
+
+pub const WARN = enum(u8) {
+    NONE,
+    WARN_AMBIGUOUS_SATURATION,
+    WARN_AMBIGUOUS_ZERO,
     ILLEGAL_OPERATOR,
     ILLEGAL_BYTE,
     ILLEGAL_ALPHANUM_IN_BINARY,
     ILLEGAL_ALPHANUM_IN_OCTAL,
     ILLEGAL_ALPHANUM_IN_HEX,
     ILLEGAL_ALPHANUM_IN_DECIMAL,
-    ILLEGAL_INTEGER_OVERFLOWS_64_BITS,
-    ILLEGAL_INTEGER_NO_SIGNIFICANT_BITS,
-    ILLEGAL_FLOAT_TOO_MANY_DOTS,
+    ILLEGAL_NUMBER_LITERAL_OVERFLOWS_64_BITS,
+    ILLEGAL_NUMBER_LITERAL_NO_SIGNIFICANT_BITS,
+    ILLEGAL_INTEGER_LITERAL_LOSS_OF_DATA,
+    ILLEGAL_INTEGER_LITERAL_NEG_OVERFLOWS_I64,
+    ILLEGAL_FLOAT_LITERAL_TOO_LARGE,
+    ILLEGAL_FLOAT_LITERAL_TOO_SMALL,
+    ILLEGAL_FLOAT_TOO_MANY_SIG_DIGITS,
+    ILLEGAL_NUMBER_TOO_MANY_DOTS,
     ILLEGAL_IDENT_TOO_LONG,
     ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
-    ILLEGAL_NUMBER_OVERFLOWS_64_BITS,
+    ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
+    ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
+};
+pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
+pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
+
+pub const KW_TABLE_1 = [_].{ *const [1:0]u8, KIND, u64 }{
+    .{ "_", KIND.DEFAULT, 0 },
+};
+pub const KW_TABLE_2 = [_].{ *const [2:0]u8, KIND, u64 }{
+    .{ "as", KIND.AS, 0 },
+    .{ "in", KIND.IN, 0 },
+    .{ "u8", KIND.U8, 0 },
+    .{ "i8", KIND.I8, 0 },
+    .{ "if", KIND.IF, 0 },
+};
+pub const KW_TABLE_3 = [_].{ *const [3:0]u8, KIND, u64 }{
+    .{ "var", KIND.VAR, 0 },
+    .{ "str", KIND.STRING, 0 },
+    .{ "std", KIND.STDLIB, 0 },
+    .{ "u16", KIND.U16, 0 },
+    .{ "i16", KIND.I16, 0 },
+    .{ "u32", KIND.U32, 0 },
+    .{ "i32", KIND.I32, 0 },
+    .{ "u64", KIND.U64, 0 },
+    .{ "i64", KIND.I64, 0 },
+};
+pub const KW_TABLE_4 = [_].{ *const [4:0]u8, KIND, u64 }{
+    .{ "func", KIND.FUNC, 0 },
+    .{ "bool", KIND.BOOL, 0 },
+    .{ "type", KIND.TYPE, 0 },
+    .{ "true", KIND.LIT_BOOL, 1 },
+    .{ "none", KIND.NONE, 0 },
+    .{ "enum", KIND.ENUM, 0 },
+    .{ "else", KIND.ELSE, 0 },
+};
+pub const KW_TABLE_5 = [_].{ *const [5:0]u8, KIND, u64 }{
+    .{ "const", KIND.CONST, 0 },
+    .{ "float", KIND.FLOAT, 0 },
+    .{ "while", KIND.WHILE, 0 },
+    .{ "break", KIND.BREAK, 0 },
+    .{ "false", KIND.LIT_BOOL, 0 },
+    .{ "union", KIND.UNION, 0 },
+    .{ "tuple", KIND.TUPLE, 0 },
+    .{ "match", KIND.MATCH, 0 },
+};
+pub const KW_TABLE_6 = [_].{ *const [6:0]u8, KIND, u64 }{
+    .{ "import", KIND.IMPORT, 0 },
+    .{ "return", KIND.RETURN, 0 },
+    .{ "struct", KIND.STRUCT, 0 },
+};
+pub const KW_TABLE_7 = [_].{ *const [7:0]u8, KIND, u64 }{
+    .{ "foreach", KIND.FOR_EACH, 0 },
+};
+pub const KW_TABLE_8 = [_].{ *const [8:0]u8, KIND, u64 }{
+    .{ "nextloop", KIND.NEXT_LOOP, 0 },
 };
 
-pub const KEYWORD_U64_TABLE = [27]u64{
-    (A.UNDERSCORE << 56), // _
-    ((A.a << 56) | (A.s << 48)), // as
-    ((A.i << 56) | (A.n << 48)), // in
-    ((A.v << 56) | (A.a << 48) | (A.r << 40)), // var
-    ((A.i << 56) | (A.n << 48) | (A.t << 40)), // int
-    ((A.f << 56) | (A.o << 48) | (A.r << 40)), // for
-    ((A.s << 56) | (A.t << 48) | (A.d << 40)), // std
-    ((A.f << 56) | (A.u << 48) | (A.n << 40) | (A.c << 32)), // func
-    ((A.b << 56) | (A.o << 48) | (A.o << 40) | (A.l << 32)), // bool
-    ((A.b << 56) | (A.y << 48) | (A.t << 40) | (A.e << 32)), // byte
-    ((A.t << 56) | (A.y << 48) | (A.p << 40) | (A.e << 32)), // type
-    ((A.t << 56) | (A.r << 48) | (A.u << 40) | (A.e << 32)), // true
-    ((A.n << 56) | (A.o << 48) | (A.n << 40) | (A.e << 32)), // none
-    ((A.e << 56) | (A.n << 48) | (A.u << 40) | (A.m << 32)), // enum
-    ((A.c << 56) | (A.o << 48) | (A.n << 40) | (A.s << 32) | (A.t << 24)), // const
-    ((A.f << 56) | (A.l << 48) | (A.o << 40) | (A.a << 32) | (A.t << 24)), // float
-    ((A.w << 56) | (A.h << 48) | (A.i << 40) | (A.l << 32) | (A.e << 24)), // while
-    ((A.b << 56) | (A.r << 48) | (A.e << 40) | (A.a << 32) | (A.k << 24)), // break
-    ((A.f << 56) | (A.a << 48) | (A.l << 40) | (A.s << 32) | (A.e << 24)), // false
-    ((A.u << 56) | (A.n << 48) | (A.i << 40) | (A.o << 32) | (A.n << 24)), // union
-    ((A.t << 56) | (A.u << 48) | (A.p << 40) | (A.l << 32) | (A.e << 24)), // tuple
-    ((A.s << 56) | (A.t << 48) | (A.r << 40) | (A.i << 32) | (A.n << 24) | (A.g << 16)), // string
-    ((A.b << 56) | (A.r << 48) | (A.a << 40) | (A.n << 32) | (A.c << 24) | (A.h << 16)), // branch
-    ((A.i << 56) | (A.m << 48) | (A.p << 40) | (A.o << 32) | (A.r << 24) | (A.t << 16)), // import
-    ((A.r << 56) | (A.e << 48) | (A.t << 40) | (A.u << 32) | (A.r << 24) | (A.n << 16)), // return
-    ((A.s << 56) | (A.t << 48) | (A.r << 40) | (A.u << 32) | (A.c << 24) | (A.t << 16)), // struct
-    ((A.n << 56) | (A.e << 48) | (A.x << 40) | (A.t << 32) | (A.l << 24) | (A.o << 16) | (A.o << 8) | A.p), // nextloop
+pub const TOTAL_KW_COUNT = KW_TABLE_1.len + KW_TABLE_2.len + KW_TABLE_3.len + KW_TABLE_4.len + KW_TABLE_5.len + KW_TABLE_6.len + KW_TABLE_7.len + KW_TABLE_8.len;
+pub const KW_SLICE_1_START = 0;
+pub const KW_SLICE_2_START = KW_SLICE_1_START + KW_TABLE_1.len;
+pub const KW_SLICE_3_START = KW_SLICE_2_START + KW_TABLE_2.len;
+pub const KW_SLICE_4_START = KW_SLICE_3_START + KW_TABLE_3.len;
+pub const KW_SLICE_5_START = KW_SLICE_4_START + KW_TABLE_4.len;
+pub const KW_SLICE_6_START = KW_SLICE_5_START + KW_TABLE_5.len;
+pub const KW_SLICE_7_START = KW_SLICE_6_START + KW_TABLE_6.len;
+pub const KW_SLICE_8_START = KW_SLICE_7_START + KW_TABLE_7.len;
+pub const KW_SLICE_8_END = KW_SLICE_8_START + KW_TABLE_8.len;
+
+pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
+    var out: [TOTAL_KW_COUNT]u64 = undefined;
+    var i = 0;
+    for (KW_TABLE_1) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56);
+        i += 1;
+    }
+    for (KW_TABLE_2) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48);
+        i += 1;
+    }
+    for (KW_TABLE_3) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
+        i += 1;
+    }
+    for (KW_TABLE_4) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
+        i += 1;
+    }
+    for (KW_TABLE_5) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
+        i += 1;
+    }
+    for (KW_TABLE_6) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
+        i += 1;
+    }
+    for (KW_TABLE_7) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
+        i += 1;
+    }
+    for (KW_TABLE_8) |kw| {
+        const str = kw[0];
+        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
+        i += 1;
+    }
+    break :eval out;
 };
-pub const KEYWORD_U64_SLICES_BY_LEN = [9][]const u64{
-    KEYWORD_U64_TABLE[0..0], // 0 char slice
-    KEYWORD_U64_TABLE[0..1], // 1 char slice
-    KEYWORD_U64_TABLE[1..3], // 2 char slice
-    KEYWORD_U64_TABLE[3..7], // 3 char slice
-    KEYWORD_U64_TABLE[7..14], // 4 char slice
-    KEYWORD_U64_TABLE[14..21], // 5 char slice
-    KEYWORD_U64_TABLE[21..26], // 6 char slice
-    KEYWORD_U64_TABLE[26..26], // 7 char slice
-    KEYWORD_U64_TABLE[26..27], // 8 char slice
+
+pub const KW_TOKEN_TABLE: [TOTAL_KW_COUNT]KIND = eval: {
+    var out: [TOTAL_KW_COUNT]KIND = undefined;
+    var i = 0;
+    for (KW_TABLE_1) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_2) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_3) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_4) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_5) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_6) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_7) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    for (KW_TABLE_8) |kw| {
+        out[i] = kw[1];
+        i += 1;
+    }
+    break :eval out;
 };
-pub const KEYWORD_TOKEN_TABLE = [27]KIND{
-    KIND.DEFAULT, // _
-    KIND.AS, // as
-    KIND.IN, // in
-    KIND.VAR, // var
-    KIND.INT, // int
-    KIND.FOR, // for
-    KIND.STDLIB, // for
-    KIND.FUNC, // func
-    KIND.BOOL, // bool
-    KIND.BYTE, // byte
-    KIND.TYPE, // type
-    KIND.LIT_BOOL, // true
-    KIND.NONE, // none
-    KIND.ENUM, // enum
-    KIND.CONST, // const
-    KIND.FLOAT, // float
-    KIND.WHILE, // while
-    KIND.BREAK, // break
-    KIND.LIT_BOOL, // false
-    KIND.UNION, // union
-    KIND.TUPLE, // tuple
-    KIND.STRING, // string
-    KIND.BRANCH, // branch
-    KIND.IMPORT, // import
-    KIND.RETURN, // return
-    KIND.STRUCT, // struct
-    KIND.NEXT_LOOP, // nextloop
+
+pub const KW_IMPLICIT_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
+    var out: [TOTAL_KW_COUNT]u64 = undefined;
+    var i = 0;
+    for (KW_TABLE_1) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_2) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_3) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_4) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_5) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_6) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_7) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    for (KW_TABLE_8) |kw| {
+        out[i] = kw[2];
+        i += 1;
+    }
+    break :eval out;
 };
-pub const KEYWORD_TOKEN_SLICES_BY_LEN = [9][]const KIND{
-    KEYWORD_TOKEN_TABLE[0..0], // 0 char slice
-    KEYWORD_TOKEN_TABLE[0..1], // 1 char slice
-    KEYWORD_TOKEN_TABLE[1..3], // 2 char slice
-    KEYWORD_TOKEN_TABLE[3..7], // 3 char slice
-    KEYWORD_TOKEN_TABLE[7..14], // 4 char slice
-    KEYWORD_TOKEN_TABLE[14..21], // 5 char slice
-    KEYWORD_TOKEN_TABLE[21..26], // 6 char slice
-    KEYWORD_TOKEN_TABLE[26..26], // 7 char slice
-    KEYWORD_TOKEN_TABLE[26..27], // 8 char slice
+pub const KW_U64_SLICES_BY_LEN = [9][]const u64{
+    KW_U64_TABLE[0..0], // 0 char slice
+    KW_U64_TABLE[KW_SLICE_1_START..KW_SLICE_2_START], // 1 char slice
+    KW_U64_TABLE[KW_SLICE_2_START..KW_SLICE_3_START], // 2 char slice
+    KW_U64_TABLE[KW_SLICE_3_START..KW_SLICE_4_START], // 3 char slice
+    KW_U64_TABLE[KW_SLICE_4_START..KW_SLICE_5_START], // 4 char slice
+    KW_U64_TABLE[KW_SLICE_5_START..KW_SLICE_6_START], // 5 char slice
+    KW_U64_TABLE[KW_SLICE_6_START..KW_SLICE_7_START], // 6 char slice
+    KW_U64_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
+    KW_U64_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
 };
-pub const LITERAL_BOOL_TRUE = KEYWORD_U64_TABLE[11];
+pub const KW_TOKEN_SLICES_BY_LEN = [9][]const u64{
+    KW_TOKEN_TABLE[0..0], // 0 char slice
+    KW_TOKEN_TABLE[KW_SLICE_1_START..KW_SLICE_2_START], // 1 char slice
+    KW_TOKEN_TABLE[KW_SLICE_2_START..KW_SLICE_3_START], // 2 char slice
+    KW_TOKEN_TABLE[KW_SLICE_3_START..KW_SLICE_4_START], // 3 char slice
+    KW_TOKEN_TABLE[KW_SLICE_4_START..KW_SLICE_5_START], // 4 char slice
+    KW_TOKEN_TABLE[KW_SLICE_5_START..KW_SLICE_6_START], // 5 char slice
+    KW_TOKEN_TABLE[KW_SLICE_6_START..KW_SLICE_7_START], // 6 char slice
+    KW_TOKEN_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
+    KW_TOKEN_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
+};
+pub const KW_IMPLICIT_SLICES_BY_LEN = [9][]const u64{
+    KW_IMPLICIT_TABLE[0..0], // 0 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_1_START..KW_SLICE_2_START], // 1 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_2_START..KW_SLICE_3_START], // 2 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_3_START..KW_SLICE_4_START], // 3 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_4_START..KW_SLICE_5_START], // 4 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_5_START..KW_SLICE_6_START], // 5 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_6_START..KW_SLICE_7_START], // 6 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
+    KW_IMPLICIT_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
+};
