@@ -10,7 +10,7 @@ row_end: u32,
 col_start: u32,
 col_end: u32,
 data_val_or_ptr: u64,
-data_exp_or_len: u32,
+data_len: u32,
 
 pub const KIND = enum(u8) {
     // Meta
@@ -18,43 +18,42 @@ pub const KIND = enum(u8) {
     COMMENT, // TL
     STDLIB, // TL
     // Definition
-    IMPORT, // T
-    CONST, // T
-    VAR, // T
-    IDENT, // T
-    DEFAULT, // T
-    AS, // T
+    IMPORT, // TL
+    CONST, // TL
+    VAR, // TL
+    IDENT, // TL
+    DEFAULT, // TL
+    AS, // TL
     // Types
-    NONE, // T
-    TYPE, // T
-    FLOAT, // T
-    U8, // T
-    I8, // T
-    U16, // T
-    I16, // T
-    U32, // T
-    I32, // T
-    U64, // T
-    I64, // T
-    F32, // T
-    F64, // T
-    BOOL, // T
-    STRING, // T
-    STRUCT, // T
+    NONE, // TL
+    TYPE, // TL
+    U8, // TL
+    I8, // TL
+    U16, // TL
+    I16, // TL
+    U32, // TL
+    I32, // TL
+    U64, // TL
+    I64, // TL
+    F32, // TL
+    F64, // TL
+    BOOL, // TL
+    STRING, // TL
+    STRUCT, // TL
     SLICE, // TL
-    ENUM, // T
-    UNION, // T
-    TUPLE, // T
-    FUNC, // T
+    ENUM, // TL
+    UNION, // TL
+    TUPLE, // TL
+    FUNC, // TL
     REFERENCE, // TL
     // Literals
     LIT_STRING,
     LIT_SUB_STR_BEGIN,
     LIT_SUB_STR_MIDDLE,
     LIT_SUB_STR_END,
-    LIT_INTEGER,
-    LIT_FLOAT,
-    LIT_BOOL, // T
+    LIT_INTEGER, // TL
+    LIT_FLOAT, // TL
+    LIT_BOOL, // TL
     // Operators
     MAYBE, // TL
     SUBSTITUTE, // TL
@@ -102,8 +101,8 @@ pub const KIND = enum(u8) {
     // Range operators
     RANGE_INCLUDE_BOTH, // TL
     RANGE_EXCLUDE_END, // TL
-    RANGE_EXCLUDE_BEGIN,
-    RANGE_EXCLUDE_BOTH,
+    RANGE_EXCLUDE_BEGIN, // TL
+    RANGE_EXCLUDE_BOTH, // TL
     // Delimiters
     COMMA, // TL
     COLON, // TL
@@ -117,15 +116,15 @@ pub const KIND = enum(u8) {
     ACCESS, // TL
     FAT_ARROW, // TL
     // Control Flow
-    MATCH, // T
-    IF, // T
-    ELSE, // T
-    WHILE, // T
-    FOR_EACH, // T
-    IN, // T
-    BREAK, // T
-    NEXT_LOOP, // T
-    RETURN, // T
+    MATCH, // TL
+    IF, // TL
+    ELSE, // TL
+    WHILE, // TL
+    FOR_EACH, // TL
+    IN, // TL
+    BREAK, // TL
+    NEXT_LOOP, // TL
+    RETURN, // TL
     // Illegal
     ILLEGAL, // TL
 };
@@ -136,6 +135,7 @@ pub const WARN = enum(u8) {
     WARN_AMBIGUOUS_ZERO,
     ILLEGAL_OPERATOR,
     ILLEGAL_BYTE,
+    ILLEGAL_FIRST_CHAR_FOR_TOKEN,
     ILLEGAL_ALPHANUM_IN_BINARY,
     ILLEGAL_ALPHANUM_IN_OCTAL,
     ILLEGAL_ALPHANUM_IN_HEX,
@@ -152,6 +152,20 @@ pub const WARN = enum(u8) {
     ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
     ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
     ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
+    ILLEGAL_UTF8_FIRST_BYTE,
+    ILLEGAL_UTF8_MALFORMED_CONTINUATION_BYTE,
+    ILLEGAL_UTF8_UNEXPECTED_CONTINUATION_BYTE,
+    ILLEGAL_UTF8_CHAR_CODE,
+    ILLEGAL_UTF8_STRING_ENDED_EARLY,
+    ILLEGAL_UTF8_OVERLONG_ENCODING,
+    ILLEGAL_STRING_NO_END_QUOTE,
+    ILLEGAL_STRING_ESCAPE_SEQUENCE,
+    ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK,
+    ILLEGAL_STRING_FILE_ENDED_BEFORE_TERMINAL_CHAR,
+    ILLEGAL_STRING_OCTAL_ESCAPE,
+    ILLEGAL_STRING_HEX_ESCAPE,
+    ILLEGAL_STRING_SHORT_UNICODE_ESCAPE,
+    ILLEGAL_STRING_LONG_UNICODE_ESCAPE,
 };
 pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
 pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
@@ -176,6 +190,8 @@ pub const KW_TABLE_3 = [_].{ *const [3:0]u8, KIND, u64 }{
     .{ "i32", KIND.I32, 0 },
     .{ "u64", KIND.U64, 0 },
     .{ "i64", KIND.I64, 0 },
+    .{ "f32", KIND.F32, 0 },
+    .{ "f64", KIND.F64, 0 },
 };
 pub const KW_TABLE_4 = [_].{ *const [4:0]u8, KIND, u64 }{
     .{ "func", KIND.FUNC, 0 },
@@ -188,7 +204,6 @@ pub const KW_TABLE_4 = [_].{ *const [4:0]u8, KIND, u64 }{
 };
 pub const KW_TABLE_5 = [_].{ *const [5:0]u8, KIND, u64 }{
     .{ "const", KIND.CONST, 0 },
-    .{ "float", KIND.FLOAT, 0 },
     .{ "while", KIND.WHILE, 0 },
     .{ "break", KIND.BREAK, 0 },
     .{ "false", KIND.LIT_BOOL, 0 },
