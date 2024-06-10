@@ -1,9 +1,10 @@
-const A = @import("./Ascii.zig");
+// const A = @import("./Ascii.zig");
+const IdentBlock = @import("./IdentBlock.zig");
 
 const Self = @This();
 
 kind: KIND, // u8
-warn: WARN, // u8
+// warn: WARN, // u8
 source_key: u16,
 row_start: u32,
 row_end: u32,
@@ -39,21 +40,21 @@ pub const KIND = enum(u8) {
     F64, // TL
     BOOL, // TL
     STRING, // TL
+    TEMPLATE, // TL
     STRUCT, // TL
     SLICE, // TL
     ENUM, // TL
+    FLAGS, // TL
     UNION, // TL
     TUPLE, // TL
     FUNC, // TL
     REFERENCE, // TL
     // Literals
     LIT_STRING,
-    LIT_SUB_STR_BEGIN,
-    LIT_SUB_STR_MIDDLE,
-    LIT_SUB_STR_END,
     LIT_INTEGER, // TL
     LIT_FLOAT, // TL
     LIT_BOOL, // TL
+    LIT_STR_TEMPLATE, // TL
     // Operators
     MAYBE, // TL
     SUBSTITUTE, // TL
@@ -133,6 +134,12 @@ pub const WARN = enum(u8) {
     NONE,
     WARN_AMBIGUOUS_SATURATION,
     WARN_AMBIGUOUS_ZERO,
+    WARN_UTF8_ILLEGAL_FIRST_BYTE,
+    WARN_UTF8_MISSING_CONTINUATION_BYTE,
+    WARN_UTF8_UNEXPECTED_CONTINUATION_BYTE,
+    WARN_UTF8_ILLEGAL_CHAR_CODE,
+    WARN_UTF8_SOURCE_ENDED_EARLY,
+    WARN_UTF8_OVERLONG_ENCODING,
     ILLEGAL_OPERATOR,
     ILLEGAL_BYTE,
     ILLEGAL_FIRST_CHAR_FOR_TOKEN,
@@ -149,15 +156,10 @@ pub const WARN = enum(u8) {
     ILLEGAL_FLOAT_TOO_MANY_SIG_DIGITS,
     ILLEGAL_NUMBER_TOO_MANY_DOTS,
     ILLEGAL_IDENT_TOO_LONG,
+    ILLEGAL_IDENT_BEGINS_WITH_DIGIT,
     ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
     ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
     ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
-    ILLEGAL_UTF8_FIRST_BYTE,
-    ILLEGAL_UTF8_MALFORMED_CONTINUATION_BYTE,
-    ILLEGAL_UTF8_UNEXPECTED_CONTINUATION_BYTE,
-    ILLEGAL_UTF8_CHAR_CODE,
-    ILLEGAL_UTF8_STRING_ENDED_EARLY,
-    ILLEGAL_UTF8_OVERLONG_ENCODING,
     ILLEGAL_STRING_NO_END_QUOTE,
     ILLEGAL_STRING_ESCAPE_SEQUENCE,
     ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK,
@@ -166,6 +168,8 @@ pub const WARN = enum(u8) {
     ILLEGAL_STRING_HEX_ESCAPE,
     ILLEGAL_STRING_SHORT_UNICODE_ESCAPE,
     ILLEGAL_STRING_LONG_UNICODE_ESCAPE,
+    ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES,
+    ILLEGAL_STRING_MULTI_R_CURLY_MUST_ESCAPE,
 };
 pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
 pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
@@ -182,7 +186,6 @@ pub const KW_TABLE_2 = [_].{ *const [2:0]u8, KIND, u64 }{
 };
 pub const KW_TABLE_3 = [_].{ *const [3:0]u8, KIND, u64 }{
     .{ "var", KIND.VAR, 0 },
-    .{ "str", KIND.STRING, 0 },
     .{ "std", KIND.STDLIB, 0 },
     .{ "u16", KIND.U16, 0 },
     .{ "i16", KIND.I16, 0 },
@@ -210,17 +213,20 @@ pub const KW_TABLE_5 = [_].{ *const [5:0]u8, KIND, u64 }{
     .{ "union", KIND.UNION, 0 },
     .{ "tuple", KIND.TUPLE, 0 },
     .{ "match", KIND.MATCH, 0 },
+    .{ "flags", KIND.FLAGS, 0 },
 };
 pub const KW_TABLE_6 = [_].{ *const [6:0]u8, KIND, u64 }{
     .{ "import", KIND.IMPORT, 0 },
     .{ "return", KIND.RETURN, 0 },
     .{ "struct", KIND.STRUCT, 0 },
+    .{ "string", KIND.STRING, 0 },
 };
 pub const KW_TABLE_7 = [_].{ *const [7:0]u8, KIND, u64 }{
     .{ "foreach", KIND.FOR_EACH, 0 },
 };
 pub const KW_TABLE_8 = [_].{ *const [8:0]u8, KIND, u64 }{
     .{ "nextloop", KIND.NEXT_LOOP, 0 },
+    .{ "template", KIND.NEXT_LOOP, 0 },
 };
 
 pub const TOTAL_KW_COUNT = KW_TABLE_1.len + KW_TABLE_2.len + KW_TABLE_3.len + KW_TABLE_4.len + KW_TABLE_5.len + KW_TABLE_6.len + KW_TABLE_7.len + KW_TABLE_8.len;
@@ -238,43 +244,51 @@ pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     var out: [TOTAL_KW_COUNT]u64 = undefined;
     var i = 0;
     for (KW_TABLE_1) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
-        const str = kw[0];
-        out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
+        // const str = kw[0];
+        // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
+        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
         i += 1;
     }
     break :eval out;

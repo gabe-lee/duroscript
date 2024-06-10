@@ -437,7 +437,6 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
     var real_len: usize = 1;
     //FIXME Get next ROM ptr and save to const
     const rom_ptr: u64 = 0;
-    //FIXME write begin_char to token ROM;
     var last_char: u32 = begin_char;
     while (self.more_bytes_in_source()) {
         const result = self.read_next_utf8_char();
@@ -449,22 +448,28 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
             ASC.B_SLASH => {
                 switch (result.code) {
                     ASC.n => {
+                        real_len += 1;
                         //FIXME add newline to token ROM
                     },
                     ASC.t => {
+                        real_len += 1;
                         //FIXME add h-tab to token ROM
                     },
                     ASC.B_SLASH => {
+                        real_len += 1;
                         //FIXME add B_SLASH to token ROM
                     },
                     ASC.DUBL_QUOTE => {
+                        real_len += 1;
                         //FIXME add DUBL_QUOTE to token ROM
                     },
-                    ASC.SNGL_QUOTE => {
-                        //FIXME add SNGL_QUOTE to token ROM
-                    },
                     ASC.BACKTICK => {
+                        real_len += 1;
                         //FIXME add BACKTICK to token ROM
+                    },
+                    ASC.r => {
+                        real_len += 1;
+                        //FIXME add CR to token ROM
                     },
                     ASC.o => {
                         if (self.source.len - self.curr_pos < 3 or
@@ -490,6 +495,7 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                         }
                         self.curr_pos += 3;
                         self.curr_col += 3;
+                        real_len += 1;
                         //FIXME add val to token ROM
                     },
                     ASC.x => {
@@ -513,6 +519,7 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                         }
                         self.curr_pos += 2;
                         self.curr_col += 2;
+                        real_len += 1;
                         //FIXME add val to token ROM
                     },
                     ASC.u => {
@@ -539,9 +546,10 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                         }
                         // const code: u32 = (x1 << 12) | (x2 << 8) | (x3 << 4) | x4;
                         // const code_result = encode_valid_codepoint(code);
+                        // real_len += code_result.len;
+                        //FIXME add code_result.bytes to token ROM
                         self.curr_pos += 4;
                         self.curr_col += 4;
-                        //FIXME add code_result.bytes to token ROM
                     },
                     ASC.U => {
                         if (self.source.len - self.curr_pos < 8 or
@@ -575,30 +583,10 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                             continue;
                         }
                         // const code_result = encode_valid_codepoint(code);
+                        // real_len += code_result.len;
+                        //FIXME add code_result.bytes to token ROM
                         self.curr_pos += 8;
                         self.curr_col += 8;
-                        //FIXME add code_result.bytes to token ROM
-                    },
-                    ASC.v => {
-                        //FIXME add v-tab to token ROM
-                    },
-                    ASC.r => {
-                        //FIXME add CR to token ROM
-                    },
-                    ASC.a => {
-                        //FIXME add BEL to token ROM
-                    },
-                    ASC.b => {
-                        //FIXME add Backspace to token ROM
-                    },
-                    ASC.f => {
-                        //FIXME add FF to token ROM
-                    },
-                    ASC.e => {
-                        //FIXME add ESC to token ROM
-                    },
-                    ASC._0 => {
-                        //FIXME add NUL to token ROM
                     },
                     else => {
                         warn = TWARN.ILLEGAL_STRING_ESCAPE_SEQUENCE;
@@ -611,6 +599,7 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                 switch (result.code) {
                     ASC.NEWLINE => {
                         //FIXME add newline to token ROM
+                        real_len += 1;
                         self.curr_col = 0;
                         self.curr_row += 1;
                         while (self.more_bytes_in_source()) {
@@ -618,6 +607,13 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                             switch (next_char) {
                                 ASC.SPACE, ASC.H_TAB => {},
                                 ASC.BACKTICK => break,
+                                ASC.NEWLINE => {
+                                    self.rollback_one_byte();
+                                    warn = TWARN.ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES;
+                                    kind = TKIND.ILLEGAL;
+                                    token_builder.set_data(rom_ptr, real_len);
+                                    return self.finish_token(kind, warn, token_builder);
+                                },
                                 else => {
                                     warn = TWARN.ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK;
                                     kind = TKIND.ILLEGAL;
@@ -630,7 +626,232 @@ fn collect_string(self: *Self, token_builder: TokenBuilder, begin_char: u8, end_
                     ASC.B_SLASH => {},
                     else => {
                         //FIXME add result.bytes to token ROM
+                        real_len += result.len;
                         if (result.code == end_char) {
+                            token_builder.set_data(rom_ptr, real_len);
+                            return self.finish_token(kind, warn, token_builder);
+                        }
+                    },
+                }
+            },
+        }
+        last_char = result.code;
+    }
+    token_builder.set_data(rom_ptr, real_len);
+    return self.finish_token(TKIND.ILLEGAL, TWARN.ILLEGAL_STRING_FILE_ENDED_BEFORE_TERMINAL_CHAR, token_builder);
+}
+
+fn collect_template_string(self: *Self, token_builder: TokenBuilder) Token {
+    var kind: TKIND = TKIND.TEMPLATE;
+    var warn: TWARN = TWARN.NONE;
+    var real_len: usize = 1;
+    //FIXME Get next ROM ptr and save to const
+    const rom_ptr: u64 = 0;
+    var last_char: u32 = 0;
+    while (self.more_bytes_in_source()) {
+        const result = self.read_next_utf8_char();
+        if (result.warn != TWARN.NONE) {
+            warn = result.warn;
+            kind = TKIND.ILLEGAL;
+        }
+        switch (last_char) {
+            ASC.B_SLASH => {
+                switch (result.code) {
+                    ASC.n => {
+                        real_len += 1;
+                        //FIXME add newline to token ROM
+                    },
+                    ASC.t => {
+                        real_len += 1;
+                        //FIXME add h-tab to token ROM
+                    },
+                    ASC.B_SLASH => {
+                        real_len += 1;
+                        //FIXME add B_SLASH to token ROM
+                    },
+                    ASC.DUBL_QUOTE => {
+                        real_len += 1;
+                        //FIXME add DUBL_QUOTE to token ROM
+                    },
+                    ASC.BACKTICK => {
+                        real_len += 1;
+                        //FIXME add BACKTICK to token ROM
+                    },
+                    ASC.r => {
+                        real_len += 1;
+                        //FIXME add CR to token ROM
+                    },
+                    ASC.DOLLAR => {
+                        real_len += 1;
+                        //FIXME add $ to token ROM
+                    },
+                    ASC.L_CURLY => {
+                        real_len += 1;
+                        //FIXME add { to token ROM
+                    },
+                    ASC.R_CURLY => {
+                        real_len += 1;
+                        //FIXME add } to token ROM
+                    },
+                    ASC.o => {
+                        if (self.source.len - self.curr_pos < 3 or
+                            self.source[self.curr_pos + 1] < ASC._0 or
+                            self.source[self.curr_pos + 2] < ASC._0 or
+                            self.source[self.curr_pos + 3] < ASC._0)
+                        {
+                            warn = TWARN.ILLEGAL_STRING_OCTAL_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        const o1 = self.source[self.curr_pos + 1] - ASC._0;
+                        const o2 = self.source[self.curr_pos + 2] - ASC._0;
+                        const o3 = self.source[self.curr_pos + 3] - ASC._0;
+
+                        const val: u16 = (o1 << 6) | (o2 << 3) | o3;
+                        if (val > ASC.DEL or o1 > 7 or o2 > 7 or o3 > 7) {
+                            warn = TWARN.ILLEGAL_STRING_OCTAL_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        self.curr_pos += 3;
+                        self.curr_col += 3;
+                        real_len += 1;
+                        //FIXME add val to token ROM
+                    },
+                    ASC.x => {
+                        if (self.source.len - self.curr_pos < 2 or
+                            self.source[self.curr_pos + 1] < ASC._0 or
+                            self.source[self.curr_pos + 2] < ASC._0)
+                        {
+                            warn = TWARN.ILLEGAL_STRING_HEX_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        const h1 = self.source[self.curr_pos + 1] - ASC._0;
+                        const h2 = self.source[self.curr_pos + 2] - ASC._0;
+                        const val: u16 = (h1 << 4) | h2;
+                        if (val > ASC.DEL or h1 > 15 or h2 > 15) {
+                            warn = TWARN.ILLEGAL_STRING_HEX_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        self.curr_pos += 2;
+                        self.curr_col += 2;
+                        real_len += 1;
+                        //FIXME add val to token ROM
+                    },
+                    ASC.u => {
+                        if (self.source.len - self.curr_pos < 4 or
+                            self.source[self.curr_pos + 1] < ASC._0 or
+                            self.source[self.curr_pos + 2] < ASC._0 or
+                            self.source[self.curr_pos + 3] < ASC._0 or
+                            self.source[self.curr_pos + 4] < ASC._0)
+                        {
+                            warn = TWARN.ILLEGAL_STRING_SHORT_UNICODE_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        const x1 = self.source[self.curr_pos + 1] - ASC._0;
+                        const x2 = self.source[self.curr_pos + 2] - ASC._0;
+                        const x3 = self.source[self.curr_pos + 3] - ASC._0;
+                        const x4 = self.source[self.curr_pos + 4] - ASC._0;
+                        if (x1 > 15 or x2 > 15 or x3 > 15 or x4 > 15) {
+                            warn = TWARN.ILLEGAL_STRING_SHORT_UNICODE_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        // const code: u32 = (x1 << 12) | (x2 << 8) | (x3 << 4) | x4;
+                        // const code_result = encode_valid_codepoint(code);
+                        // real_len += code_result.len;
+                        //FIXME add code_result.bytes to token ROM
+                        self.curr_pos += 4;
+                        self.curr_col += 4;
+                    },
+                    ASC.U => {
+                        if (self.source.len - self.curr_pos < 8 or
+                            self.source[self.curr_pos + 1] < ASC._0 or
+                            self.source[self.curr_pos + 2] < ASC._0 or
+                            self.source[self.curr_pos + 3] < ASC._0 or
+                            self.source[self.curr_pos + 4] < ASC._0 or
+                            self.source[self.curr_pos + 5] < ASC._0 or
+                            self.source[self.curr_pos + 6] < ASC._0 or
+                            self.source[self.curr_pos + 7] < ASC._0 or
+                            self.source[self.curr_pos + 8] < ASC._0)
+                        {
+                            warn = TWARN.ILLEGAL_STRING_LONG_UNICODE_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        const x1 = self.source[self.curr_pos + 1] - ASC._0;
+                        const x2 = self.source[self.curr_pos + 2] - ASC._0;
+                        const x3 = self.source[self.curr_pos + 3] - ASC._0;
+                        const x4 = self.source[self.curr_pos + 4] - ASC._0;
+                        const x5 = self.source[self.curr_pos + 5] - ASC._0;
+                        const x6 = self.source[self.curr_pos + 6] - ASC._0;
+                        const x7 = self.source[self.curr_pos + 7] - ASC._0;
+                        const x8 = self.source[self.curr_pos + 8] - ASC._0;
+                        const code: u32 = (x1 << 28) | (x2 << 24) | (x3 << 20) | (x4 << 16) | (x5 << 12) | (x6 << 8) | (x7 << 4) | x8;
+                        if (code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF) or x1 > 15 or x2 > 15 or x3 > 15 or x4 > 15 or x5 > 15 or x6 > 15 or x7 > 15 or x8 > 15) {
+                            warn = TWARN.ILLEGAL_STRING_LONG_UNICODE_ESCAPE;
+                            kind = TKIND.ILLEGAL;
+                            last_char = result.code;
+                            continue;
+                        }
+                        // const code_result = encode_valid_codepoint(code);
+                        // real_len += code_result.len;
+                        //FIXME add code_result.bytes to token ROM
+                        self.curr_pos += 8;
+                        self.curr_col += 8;
+                    },
+                    else => {
+                        warn = TWARN.ILLEGAL_STRING_ESCAPE_SEQUENCE;
+                        kind = TKIND.ILLEGAL;
+                    },
+                }
+            },
+            else => {
+                switch (result.code) {
+                    ASC.NEWLINE => {
+                        //FIXME add newline to token ROM
+                        real_len += 1;
+                        self.curr_col = 0;
+                        self.curr_row += 1;
+                        while (self.more_bytes_in_source()) {
+                            const next_char = self.read_next_utf8_char();
+                            switch (next_char) {
+                                ASC.SPACE, ASC.H_TAB => {},
+                                ASC.BACKTICK => break,
+                                ASC.NEWLINE => {
+                                    self.rollback_one_byte();
+                                    warn = TWARN.ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES;
+                                    kind = TKIND.ILLEGAL;
+                                    token_builder.set_data(rom_ptr, real_len);
+                                    return self.finish_token(kind, warn, token_builder);
+                                },
+                                else => {
+                                    warn = TWARN.ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK;
+                                    kind = TKIND.ILLEGAL;
+                                    token_builder.set_data(rom_ptr, real_len);
+                                    return self.finish_token(kind, warn, token_builder);
+                                },
+                            }
+                        }
+                    },
+                    ASC.B_SLASH => {},
+                    ASC.L_CURLY => {
+                        //FIXME handle text replacement site
+                    },
+                    else => {
+                        //FIXME add result.bytes to token ROM
+                        real_len += result.len;
+                        if (result.code == ASC.DUBL_QUOTE) {
                             token_builder.set_data(rom_ptr, real_len);
                             return self.finish_token(kind, warn, token_builder);
                         }
@@ -1178,9 +1399,6 @@ const TokenBuilder = struct {
 const MAX_POSITIVE_I64 = std.math.maxInt(isize);
 const MAX_NEGATIVE_I64 = MAX_POSITIVE_I64 + 1;
 
-const IdentBlock = [8]u64;
-const BLANK_IDENT: IdentBlock = IdentBlock{ 0, 0, 0, 0, 0, 0, 0, 0 };
-
 const LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9: u64 = 1844674407370955160;
 const LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5: u64 = 1844674407370955161;
 
@@ -1209,3 +1427,5 @@ const MAX_INT_VALS_FOR_POSITIVE_EXP = [20]u64{
 
 pub const NUM_SIG_NEG_FLAG: u32 = 0b10000000_00000000_00000000_00000000;
 pub const LARGEST_NEG_SIG_VALUE_FOR_I64: u64 = 9223372036854775808;
+
+
