@@ -25,6 +25,10 @@ const_list_offset: u32,
 const_source_offset: u32,
 segment_list_offset: u32,
 
+pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NOTICE) TemplateStringParseResult {
+    return TemplateStringLexed.parse_from_source(source, notice_kind);
+}
+
 const ReplaceSegment = struct {
     input: u32,
     start: u32,
@@ -151,8 +155,8 @@ const TemplateStringLexed = struct {
         };
     }
 
-    pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NOTICE) TemplateStringParseResult {
-        var kind = TOK.TEMPLATE;
+    fn parse_from_source(source: *SourceReader, comptime notice_kind: NOTICE) TemplateStringParseResult {
+        var kind = TOK.LIT_STR_TEMPLATE;
         var t_string = TemplateStringLexed.create();
         var is_escape: bool = false;
         var const_builder = ListUm(u8){};

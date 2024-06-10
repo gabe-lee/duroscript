@@ -4,7 +4,7 @@ const UNI = @import("./Unicode.zig");
 const U = UNI;
 const ASC = UNI.ASCII;
 const NoticeManager = @import("./NoticeManager.zig");
-const NKIND = NoticeManager.KIND;
+const NOTICE = NoticeManager.KIND;
 const nkind_string = NoticeManager.kind_string;
 
 const Self = @This();
@@ -150,29 +150,26 @@ pub fn rollback_position(self: *Self) void {
     self.rolled_back_to_prev = true;
 }
 
-pub fn add_illegal_string_escape_sequence_notice(self: *Self, comptime notice_kind: NKIND, code: u32) void {
+pub fn add_illegal_string_escape_sequence_notice(self: *Self, comptime notice_kind: NOTICE, code: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid string escape sequence, found unknown escape sequence (possibly a valid escape sequence in an invalid context)
         \\  EXPECTED: escape == '\\n', '\\t', '\\r', '\\o', '\\x', '\\u', '\\U', or context-specific escapes '\\{', '\\}', '\\"', '\\'', '\\`'
         \\  FOUND:    escape == '\\{u}'
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, code });
+    , .{code});
 }
 
-pub fn add_illegal_char_multiline_notice(self: *Self, comptime notice_kind: NKIND, byte: u8) void {
+pub fn add_illegal_char_multiline_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid multiline string (newlines have ONLY non-linebreak whitespace before first ` char), found invalid byte before `
         \\  EXPECTED: string == "......
         \\      `........."
         \\  FOUND:    string == "......
         \\      {u}........."
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, byte });
+    , .{byte});
 }
 
-pub fn add_runaway_multiline_notice(self: *Self, comptime notice_kind: NKIND) void {
+pub fn add_runaway_multiline_notice(self: *Self, comptime notice_kind: NOTICE) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid multiline string (newlines have ` char before any additional newlines), found second newline before `
         \\  EXPECTED: string == "......
         \\      `
@@ -180,28 +177,26 @@ pub fn add_runaway_multiline_notice(self: *Self, comptime notice_kind: NKIND) vo
         \\  FOUND:    string == "......
         \\      
         \\      .........
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos });
+    , .{});
 }
 
-pub fn add_source_end_before_string_end_notice(self: *Self, comptime notice_kind: NKIND) void {
+pub fn add_source_end_before_string_end_notice(self: *Self, comptime notice_kind: NOTICE) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected string termination before end of source file, reached end of source without termination
         \\  EXPECTED: string == "......"
         \\  FOUND:    string == "......(EOF)
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos });
+    , .{});
 }
 
-pub fn add_illegal_ascii_notice(self: *Self, comptime notice_kind: NKIND, byte: u8) void {
+pub fn add_illegal_ascii_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected only 1-byte UTF-8 (ASCII) characters in this context, multi-byte UTF-8 not allowed
         \\  EXPECTED: byte <= 127 (0x7F)
         \\  FOUND:    byte == {d} ({h})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, byte, byte });
+    , .{ byte, byte });
 }
 
-pub fn read_next_ascii(self: *Self, comptime notice_kind: NKIND) u8 {
+pub fn read_next_ascii(self: *Self, comptime notice_kind: NOTICE) u8 {
     assert(self.source.len > self.curr.pos);
     var val: u8 = self.source[self.curr.pos];
     self.rolled_back_to_prev = false;
@@ -241,61 +236,55 @@ pub const UTF8_Read_Result = struct {
     }
 };
 
-pub fn add_unexpected_continue_byte_notice(self: *Self, comptime notice_kind: NKIND, byte: u8) void {
+pub fn add_unexpected_continue_byte_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid UTF-8 first-byte pattern in first byte position, found UTF-8 continuation byte pattern
         \\  EXPECTED: bits == 0xxxxxxx OR 110xxxxx OR 1110xxxx OR 11110xxx
         \\  FOUND:    bits == 10xxxxxx ({b} = {d})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, byte, byte });
+    , .{ byte, byte });
 }
 
-pub fn add_missing_continue_byte_notice(self: *Self, comptime notice_kind: NKIND, byte: u8, offset: u8) void {
+pub fn add_missing_continue_byte_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8, offset: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid UTF-8 continue-byte pattern at byte offset {d}, found invalid or first-byte pattern
         \\  EXPECTED: bits at offset {d} == 10xxxxxx
         \\  FOUND:    bits at offset {d} == {b} ({d})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, offset, offset, byte, byte });
+    , .{ offset, offset, byte, byte });
 }
 
-pub fn add_illegal_utf8_byte_notice(self: *Self, comptime notice_kind: NKIND, byte: u8) void {
+pub fn add_illegal_utf8_byte_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid UTF-8 byte, found byte that cannot exist in any valid UTF-8 sequence
         \\  EXPECTED: byte in range: 0...191 OR 194...244
         \\  FOUND:    byte == {d} ({h})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, byte, byte });
+    , .{ byte, byte });
 }
 
-pub fn add_utf8_source_too_short_notice(self: *Self, comptime notice_kind: NKIND, needed: u8) void {
+pub fn add_utf8_source_too_short_notice(self: *Self, comptime notice_kind: NOTICE, needed: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected at least {d} bytes left in source to complete UTF-8 char, but source ended early
         \\  EXPECTED: source bytes left >= {d}
         \\  FOUND:    source bytes left == {d}
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, needed, needed, self.source.len - self.prev.pos });
+    , .{ needed, needed, self.source.len - self.prev.pos });
 }
 
-pub fn add_illegal_utf8_codepoint_notice(self: *Self, comptime notice_kind: NKIND, code: u32) void {
+pub fn add_illegal_utf8_codepoint_notice(self: *Self, comptime notice_kind: NOTICE, code: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected legal UTF-8 codepoint, found illegal codepoint
         \\  EXPECTED: code < 0xD800 OR (0xDFFF < code < 0x110000)
         \\  FOUND:    code == {h} ({d})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, code, code });
+    , .{ code, code });
 }
 
-pub fn add_utf8_overlong_encoding_notice(self: *Self, comptime notice_kind: NKIND, code: u32, bytes: u8, min: u32, max: u32) void {
+pub fn add_utf8_overlong_encoding_notice(self: *Self, comptime notice_kind: NOTICE, code: u32, bytes: u8, min: u32, max: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected codepoint that cannot be encoded in less than {d} bytes, found overlong encoding
         \\  EXPECTED: {h} <= code <= {h}
         \\  FOUND:    code == {h} ({d})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, bytes, min, max, code, code });
+    , .{ bytes, min, max, code, code });
 }
 
-pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NKIND) UTF8_Read_Result {
+pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NOTICE) UTF8_Read_Result {
     if (self.rolled_back_to_prev) {
         self.rolled_back_to_prev = false;
         self.swap_curr_and_prev();
@@ -447,16 +436,15 @@ pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NKIND) UTF8_Read_R
     }
 }
 
-pub fn add_illegal_octal_escape_notice(self: *Self, comptime notice_kind: NKIND, escape: []const u8, comptime e_char: u8, comptime n: comptime_int) void {
+pub fn add_illegal_octal_escape_notice(self: *Self, comptime notice_kind: NOTICE, escape: []const u8, comptime e_char: u8, comptime n: comptime_int) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid octal escape (all chars in range '0'-'7'), found illegal byte for octal escape
         \\  EXPECTED: "\\{u}{s}" to "\\{u}{s}"
         \\  FOUND:    "{s}"
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, e_char, "0" ** n, e_char, "7" ** n, escape });
+    , .{ e_char, "0" ** n, e_char, "7" ** n, escape });
 }
 
-pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NKIND, comptime e_char: u8, comptime n: comptime_int) UTF8_Read_Result {
+pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NOTICE, comptime e_char: u8, comptime n: comptime_int) UTF8_Read_Result {
     self.rolled_back_to_prev = false;
     self.prev = self.curr;
     if (self.source.len - self.curr.pos < n) {
@@ -493,16 +481,15 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NKIN
     return self.next_utf8;
 }
 
-pub fn add_illegal_hex_escape_notice(self: *Self, comptime notice_kind: NKIND, escape: []const u8, comptime e_char: u8, comptime n: comptime_int) void {
+pub fn add_illegal_hex_escape_notice(self: *Self, comptime notice_kind: NOTICE, escape: []const u8, comptime e_char: u8, comptime n: comptime_int) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected valid hexidecimal escape (all chars in range '0'-'9', 'a'-'f', or 'A'-'F'), found illegal byte for hexidecimal escape
         \\  EXPECTED: "\\{u}{s}" to "\\{u}{s}"
         \\  FOUND:    "{s}"
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, e_char, "0" ** n, e_char, "F" ** n, escape });
+    , .{ e_char, "0" ** n, e_char, "F" ** n, escape });
 }
 
-pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NKIND, comptime e_char: u8, comptime n: comptime_int) UTF8_Read_Result {
+pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NOTICE, comptime e_char: u8, comptime n: comptime_int) UTF8_Read_Result {
     self.rolled_back_to_prev = false;
     self.prev = self.curr;
     if (self.source.len - self.curr.pos < n) {
@@ -541,47 +528,56 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NKIND,
     return self.next_utf8;
 }
 
-pub fn add_source_end_before_expected_token_notice(self: *Self, comptime notice_kind: NKIND) void {
+pub fn add_source_end_before_expected_token_notice(self: *Self, comptime notice_kind: NOTICE) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected another token before end of source, but source ended early
         \\  EXPECTED: (token)...(EOF)
         \\  FOUND:    (EOF)
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos });
+    , .{});
 }
 
-pub fn add_ident_too_long_notice(self: *Self, comptime notice_kind: NKIND, len: u32, ident: []const u8) void {
+pub fn add_ident_too_long_notice(self: *Self, comptime notice_kind: NOTICE, len: u32, ident: []const u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Identifiers must be less than or equal to 64 bytes in length, found identifier over 64 bytes
         \\  EXPECTED: ident length <= 64
         \\  FOUND:    ident length == {d} ({s})
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, len, ident });
+    , .{ len, ident });
 }
 
-pub fn add_ident_first_byte_is_digit_notice(self: *Self, comptime notice_kind: NKIND, ident: []const u8) void {
+pub fn add_ident_first_byte_is_digit_notice(self: *Self, comptime notice_kind: NOTICE, ident: []const u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Identifiers must not start with the digits '0'-'9', only 'a'-'z', 'A'-'Z', or '_' allowed in first byte
         \\  EXPECTED: ident with non-numeric first byte
         \\  FOUND:    ident == {s}
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, ident });
+    , .{ident});
 }
 
-pub fn add_ident_expected_but_not_found_notice(self: *Self, comptime notice_kind: NKIND) void {
+pub fn add_ident_expected_but_not_found_notice(self: *Self, comptime notice_kind: NOTICE) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected identifier in this position, but no valid identifier was found
         \\  EXPECTED: bytes in range 'a'-'z', 'A'-'Z', '0'-'9', or '_'
         \\  FOUND:    no bytes that can form an identifier
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos });
+    , .{});
 }
 
-pub fn add_illegal_char_after_template_string_replace_ident(self: *Self, comptime notice_kind: NKIND, replace_slice: []const u8) void {
+pub fn add_illegal_char_after_template_string_replace_ident(self: *Self, comptime notice_kind: NOTICE, replace_slice: []const u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\{s} => SOURCE: {s} COL: {d} ROW: {d} BYTE_POS: {d}
         \\  Expected either end of replacement segment or a colon followed by a formating code after the identifier
         \\  EXPECTED: "...\{identifier : format\}..." or "...\{identifier\}..."
         \\  FOUND:    "...\{{s}\}..."
-    , .{ nkind_string(notice_kind), self.source_name, self.prev.col, self.prev.row, self.prev.pos, replace_slice });
+    , .{replace_slice});
 }
+
+pub fn add_generic_illegal_token_notice(self: *Self, comptime notice_kind: NOTICE, pattern: []const u8) void {
+    NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
+        \\  Expected legal token at this location, found char pattern that does not resolve to any legal token
+        \\  ILLEGAL PATTERN: {s}
+    , .{pattern});
+}
+
+// pub fn add_generic_illegal_token_notice(self: *Self, comptime notice_kind: NOTICE, pattern: []const u8) void {
+//     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
+//         \\  Expected legal token at this location, found char pattern that does not resolve to any legal token
+//         \\  ILLEGAL PATTERN: {s}
+//     , .{pattern});
+// }

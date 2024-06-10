@@ -3,8 +3,7 @@ const IdentBlock = @import("./IdentBlock.zig");
 
 const Self = @This();
 
-kind: KIND, // u8
-// warn: WARN, // u8
+kind: KIND,
 source_key: u16,
 row_start: u32,
 row_end: u32,
@@ -12,6 +11,7 @@ col_start: u32,
 col_end: u32,
 data_val_or_ptr: u64,
 data_len: u32,
+data_extra: u8,
 
 pub const KIND = enum(u8) {
     // Meta
@@ -43,12 +43,14 @@ pub const KIND = enum(u8) {
     TEMPLATE, // TL
     STRUCT, // TL
     SLICE, // TL
+    LIST, // TL
     ENUM, // TL
     FLAGS, // TL
     UNION, // TL
     TUPLE, // TL
     FUNC, // TL
     REFERENCE, // TL
+    MAYBE_NONE, // TL
     // Literals
     LIT_STRING,
     LIT_INTEGER, // TL
@@ -56,7 +58,7 @@ pub const KIND = enum(u8) {
     LIT_BOOL, // TL
     LIT_STR_TEMPLATE, // TL
     // Operators
-    MAYBE, // TL
+    ACCESS_MAYBE_NONE, // TL
     SUBSTITUTE, // TL
     DEREREFENCE, // TL
     ASSIGN, // TL
@@ -90,7 +92,6 @@ pub const KIND = enum(u8) {
     BIT_XOR, // TL
     BIT_AND_ASSIGN, // TL
     BIT_OR_ASSIGN, // TL
-    BIT_NOT_ASSIGN, // TL
     BIT_XOR_ASSIGN, // TL
     LOGIC_AND, // TL
     LOGIC_OR, // TL
