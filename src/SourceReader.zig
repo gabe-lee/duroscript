@@ -43,19 +43,19 @@ pub const SourceRange = struct {
     start: SourceIdx,
     end: SourceIdx,
 
-    pub fn new(filename: []const u8, start: SourceIdx, end: SourceIdx) SourceRange {
+    pub fn new(source_name: []const u8, start: SourceIdx, end: SourceIdx) SourceRange {
         return SourceRange{
-            .filename = filename,
+            .source_name = source_name,
             .start = start,
             .end = end,
         };
     }
 };
 
-pub inline fn new(filename: []const u8, source: []const u8) Self {
+pub inline fn new(source_name: []const u8, source: []const u8) Self {
     return Self{
         .source = source,
-        .filename = filename,
+        .source_name = source_name,
         .curr = SourceIdx{
             .pos = 0,
             .col = 0,
@@ -67,7 +67,7 @@ pub inline fn new(filename: []const u8, source: []const u8) Self {
             .row = 0,
         },
         .rolled_back_to_prev = false,
-        .next_utf8_result = UTF8_Read_Result{
+        .next_utf8 = UTF8_Read_Result{
             .code = 0,
             .bytes = [4]u8{ 0, 0, 0, 0 },
             .len = 0,
@@ -86,6 +86,7 @@ pub inline fn is_complete(self: *Self) bool {
 }
 
 pub fn skip_until_byte_match(self: *Self, comptime match_byte: u8) void {
+    self.rolled_back_to_prev = false;
     while (self.source.len > self.curr.pos) {
         const byte = self.source[self.curr.pos];
         switch (byte) {
@@ -93,12 +94,10 @@ pub fn skip_until_byte_match(self: *Self, comptime match_byte: u8) void {
                 self.curr.pos += 1;
                 self.curr.col = 0;
                 self.curr.row += 1;
-                self.prev_is_next = false;
             },
             else => {
                 self.curr.pos += 1;
                 self.curr.col += 1;
-                self.prev_is_next = false;
             },
         }
         if (byte == match_byte) {
@@ -115,13 +114,13 @@ pub fn skip_whitespace(self: *Self) void {
             ASC.SPACE, ASC.H_TAB, ASC.CR => {
                 self.curr.pos += 1;
                 self.curr.col += 1;
-                self.prev_is_next = false;
+                self.rolled_back_to_prev = false;
             },
             ASC.NEWLINE => {
                 self.curr.pos += 1;
                 self.curr.col = 0;
                 self.curr.row += 1;
-                self.prev_is_next = false;
+                self.rolled_back_to_prev = false;
             },
             else => break,
         }
@@ -136,7 +135,37 @@ pub fn skip_whitespace_except_newline(self: *Self) void {
             ASC.SPACE, ASC.H_TAB, ASC.CR => {
                 self.curr.pos += 1;
                 self.curr.col += 1;
-                self.prev_is_next = false;
+                self.rolled_back_to_prev = false;
+            },
+            else => break,
+        }
+    }
+    return;
+}
+
+pub fn skip_illegal_alphanumeric_string(self: *Self) void {
+    self.rolled_back_to_prev = false;
+    while (self.source.len > self.curr.pos) {
+        const byte = self.source[self.curr.pos];
+        switch (byte) {
+            ASC._0...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
+                self.curr.pos += 1;
+                self.curr.col += 1;
+            },
+            else => break,
+        }
+    }
+    return;
+}
+
+pub fn skip_illegal_alphanumeric_string_plus_dot(self: *Self) void {
+    self.rolled_back_to_prev = false;
+    while (self.source.len > self.curr.pos) {
+        const byte = self.source[self.curr.pos];
+        switch (byte) {
+            ASC._0...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE, ASC.PERIOD => {
+                self.curr.pos += 1;
+                self.curr.col += 1;
             },
             else => break,
         }
@@ -153,9 +182,9 @@ pub fn rollback_position(self: *Self) void {
 pub fn add_illegal_string_escape_sequence_notice(self: *Self, comptime notice_kind: NOTICE, code: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected valid string escape sequence, found unknown escape sequence (possibly a valid escape sequence in an invalid context)
-        \\  EXPECTED: escape == '\\n', '\\t', '\\r', '\\o', '\\x', '\\u', '\\U', or context-specific escapes '\\{', '\\}', '\\"', '\\'', '\\`'
+        \\  EXPECTED: escape == '\\n', '\\t', '\\r', '\\o', '\\x', '\\u', '\\U', or context-specific escapes '\\\x7B', '\\\x7D', '\\"', '\\'', '\\`'
         \\  FOUND:    escape == '\\{u}'
-    , .{code});
+    , .{@as(u21, @intCast(code))});
 }
 
 pub fn add_illegal_char_multiline_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
@@ -192,8 +221,22 @@ pub fn add_illegal_ascii_notice(self: *Self, comptime notice_kind: NOTICE, byte:
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected only 1-byte UTF-8 (ASCII) characters in this context, multi-byte UTF-8 not allowed
         \\  EXPECTED: byte <= 127 (0x7F)
-        \\  FOUND:    byte == {d} ({h})
+        \\  FOUND:    byte == {d} ({X})
     , .{ byte, byte });
+}
+
+pub fn read_next_byte(self: *Self) u8 {
+    assert(self.source.len > self.curr.pos);
+    const val: u8 = self.source[self.curr.pos];
+    self.rolled_back_to_prev = false;
+    self.prev = self.curr;
+    if (val == ASC.NEWLINE) {
+        self.curr.advance_newline();
+    } else {
+        self.curr.advance_one_col(1);
+    }
+    self.next_utf8 = UTF8_Read_Result.new(val, [4]u8{ val, 0, 0, 0 }, 1);
+    return val;
 }
 
 pub fn read_next_ascii(self: *Self, comptime notice_kind: NOTICE) u8 {
@@ -249,14 +292,14 @@ pub fn add_missing_continue_byte_notice(self: *Self, comptime notice_kind: NOTIC
         \\  Expected valid UTF-8 continue-byte pattern at byte offset {d}, found invalid or first-byte pattern
         \\  EXPECTED: bits at offset {d} == 10xxxxxx
         \\  FOUND:    bits at offset {d} == {b} ({d})
-    , .{ offset, offset, byte, byte });
+    , .{ offset, offset, offset, byte, byte });
 }
 
 pub fn add_illegal_utf8_byte_notice(self: *Self, comptime notice_kind: NOTICE, byte: u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected valid UTF-8 byte, found byte that cannot exist in any valid UTF-8 sequence
         \\  EXPECTED: byte in range: 0...191 OR 194...244
-        \\  FOUND:    byte == {d} ({h})
+        \\  FOUND:    byte == {d} ({X})
     , .{ byte, byte });
 }
 
@@ -272,15 +315,15 @@ pub fn add_illegal_utf8_codepoint_notice(self: *Self, comptime notice_kind: NOTI
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected legal UTF-8 codepoint, found illegal codepoint
         \\  EXPECTED: code < 0xD800 OR (0xDFFF < code < 0x110000)
-        \\  FOUND:    code == {h} ({d})
+        \\  FOUND:    code == {X} ({d})
     , .{ code, code });
 }
 
 pub fn add_utf8_overlong_encoding_notice(self: *Self, comptime notice_kind: NOTICE, code: u32, bytes: u8, min: u32, max: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected codepoint that cannot be encoded in less than {d} bytes, found overlong encoding
-        \\  EXPECTED: {h} <= code <= {h}
-        \\  FOUND:    code == {h} ({d})
+        \\  EXPECTED: {X} <= code <= {X}
+        \\  FOUND:    code == {X} ({d})
     , .{ bytes, min, max, code, code });
 }
 
@@ -335,8 +378,8 @@ pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NOTICE) UTF8_Read_
                 return self.next_utf8;
             }
             const code: u32 =
-                ((self.source[self.curr.pos] & U.BYTE_1_OF_2_VAL_MASK) << 6) |
-                (self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK);
+                (@as(u32, (self.source[self.curr.pos] & U.BYTE_1_OF_2_VAL_MASK)) << 6) |
+                @as(u32, (self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK));
             if (code < U.MIN_2_BYTE_CODE_POINT) {
                 self.curr.advance_one_col(2);
                 self.add_utf8_overlong_encoding_notice(notice_kind, code, 2, U.MIN_2_BYTE_CODE_POINT, U.MAX_2_BYTE_CODE_POINT);
@@ -367,9 +410,9 @@ pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NOTICE) UTF8_Read_
                 return self.next_utf8;
             }
             const code: u32 =
-                ((self.source[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK) << 12) |
-                ((self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK) << 6) |
-                (self.source[self.curr.pos + 2] & U.CONT_BYTE_VAL_MASK);
+                (@as(u32, (self.source[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK)) << 12) |
+                (@as(u32, (self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK)) << 6) |
+                @as(u32, (self.source[self.curr.pos + 2] & U.CONT_BYTE_VAL_MASK));
             if ((code >= U.MIN_SURG_PAIR_CODE_POINT) or (code <= U.MAX_SURG_PAIR_CODE_POINT)) {
                 self.curr.advance_one_col(3);
                 self.add_illegal_utf8_codepoint_notice(notice_kind, code);
@@ -412,10 +455,10 @@ pub fn read_next_utf8_char(self: *Self, comptime notice_kind: NOTICE) UTF8_Read_
                 return self.next_utf8;
             }
             const code: u32 =
-                ((self.source[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK) << 18) |
-                ((self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK) << 12) |
-                ((self.source[self.curr.pos + 2] & U.CONT_BYTE_VAL_MASK) << 6) |
-                (self.source[self.curr.pos + 3] & U.CONT_BYTE_VAL_MASK);
+                (@as(u32, (self.source[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK)) << 18) |
+                (@as(u32, (self.source[self.curr.pos + 1] & U.CONT_BYTE_VAL_MASK)) << 12) |
+                (@as(u32, (self.source[self.curr.pos + 2] & U.CONT_BYTE_VAL_MASK)) << 6) |
+                @as(u32, (self.source[self.curr.pos + 3] & U.CONT_BYTE_VAL_MASK));
             if (code > U.MAX_4_BYTE_CODE_POINT) {
                 self.curr.advance_one_col(4);
                 self.add_illegal_utf8_codepoint_notice(notice_kind, code);
@@ -460,13 +503,13 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NOTI
             ASC._0...ASC._7 => byte - ASC._0,
             else => {
                 const escape = self.source[self.curr.pos - 2 .. self.curr.pos + n];
-                self.curr.advance_n_cols(i, i);
+                self.curr.advance_n_cols(@intCast(i), @intCast(i));
                 self.add_illegal_octal_escape_notice(notice_kind, escape, e_char, n);
                 self.next_utf8 = UTF8_Read_Result.replace_char();
                 return self.next_utf8;
             },
         };
-        code |= val << bit;
+        code |= val << @intCast(bit);
         bit -= 3;
     }
     if (!U.is_valid_codepoint(code)) {
@@ -507,13 +550,13 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NOTICE
             ASC.a...ASC.f => (byte - ASC.a) + 10,
             else => {
                 const escape = self.source[self.curr.pos - 2 .. self.curr.pos + n];
-                self.curr.advance_n_cols(i, i);
+                self.curr.advance_n_cols(@intCast(i), @intCast(i));
                 self.add_illegal_hex_escape_notice(notice_kind, escape, e_char, n);
                 self.next_utf8 = UTF8_Read_Result.replace_char();
                 return self.next_utf8;
             },
         };
-        code |= val << bit;
+        code |= val << @intCast(bit);
         bit -= 4;
     }
     if (!U.is_valid_codepoint(code)) {
@@ -563,8 +606,8 @@ pub fn add_ident_expected_but_not_found_notice(self: *Self, comptime notice_kind
 pub fn add_illegal_char_after_template_string_replace_ident(self: *Self, comptime notice_kind: NOTICE, replace_slice: []const u8) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
         \\  Expected either end of replacement segment or a colon followed by a formating code after the identifier
-        \\  EXPECTED: "...\{identifier : format\}..." or "...\{identifier\}..."
-        \\  FOUND:    "...\{{s}\}..."
+        \\  EXPECTED: "...identifier : format..." or "...identifier..."
+        \\  FOUND:    "...{s}..."
     , .{replace_slice});
 }
 

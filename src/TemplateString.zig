@@ -11,8 +11,8 @@ const NoticeManager = @import("./NoticeManager.zig");
 const NOTICE = NoticeManager.KIND;
 const nkind_string = NoticeManager.kind_string;
 
-const ParsingAllocator = @import("./ParsingAllocator.zig").Global;
-const ProgramROM = @import("./ProgramROM.zig").Global;
+const ParsingAllocator = @import("./ParsingAllocator.zig");
+const ProgramROM = @import("./ProgramROM.zig");
 
 const Self = @This();
 
@@ -65,10 +65,10 @@ const TemplateStringLexed = struct {
 
     fn create() TemplateStringLexed {
         return TemplateStringLexed{
-            .alloc = ParsingAllocator.allocator(),
-            .byte_list = ListUm(u8){},
-            .switch_len = 0,
-            .switch_list = ListUm(u8){},
+            .alloc = ParsingAllocator.global.alloc,
+            .const_source = ListUm(u8){},
+            .seg_count = 0,
+            .seg_list = ListUm(u8){},
             .ident_list = ListUm(IdentBlock){},
             .const_list = ListUm(ConstSegment){},
             .replace_list = ListUm(ReplaceSegment){},
@@ -90,24 +90,25 @@ const TemplateStringLexed = struct {
             try self.seg_list.append(self.alloc, 0);
         }
         self.seg_count += 1;
-        const start = self.const_source.items.len;
+        const start: u32 = @intCast(self.const_source.items.len);
         try self.const_source.appendSlice(self.alloc, bytes);
-        const end = self.const_source.items.len;
+        const end: u32 = @intCast(self.const_source.items.len);
         try self.const_list.append(self.alloc, ConstSegment{ .start = start, .end = end });
     }
 
     fn push_replace_segment(self: *TemplateStringLexed, seg: ReplaceSegment) !void {
         const real_idx = (self.seg_count & SIDX_MASK) >> SIDX_SHIFT;
-        const sub_idx = self.seg_count & SSUB_MASK;
+        const sub_idx: u8 = @truncate(self.seg_count & SSUB_MASK);
         if (real_idx == self.seg_list.items.len) {
             try self.seg_list.append(self.alloc, 0);
         }
-        self.seg_list.items[real_idx] |= (1 << sub_idx);
+        self.seg_list.items[real_idx] |= @as(u8, 1) << @intCast(sub_idx);
         self.seg_count += 1;
-        self.replace_list.append(self.alloc, seg);
+        self.replace_list.append(self.alloc, seg) catch unreachable;
     }
 
     fn serialize_to_ROM(self: *TemplateStringLexed, token: TOK) TemplateStringParseResult {
+        const program_rom = &ProgramROM.global;
         const replace_list_len: u32 = @truncate(self.replace_list.items.len * @sizeOf(ReplaceSegment));
         const const_list_len: u32 = @truncate(self.const_list.items.len * @sizeOf(ConstSegment));
         const ident_list_len: u32 = @truncate(self.ident_list.items.len * @sizeOf(IdentBlock));
@@ -121,32 +122,31 @@ const TemplateStringLexed = struct {
             const_source_len +
             switch_list_byte_len;
         assert(len < std.math.maxInt(u32));
-        ProgramROM.prepare_space_for_write(len, SERIAL_ALIGN);
-        const ptr: u64 = @bitCast(ProgramROM.len);
+        program_rom.prepare_space_for_write(len, SERIAL_ALIGN);
+        const ptr: u64 = @bitCast(program_rom.len);
         const replace_list_offset: u32 = IDENT_LIST_OFFSET + ident_list_len;
         const const_list_offset: u32 = replace_list_offset + replace_list_len;
         const const_source_offset: u32 = const_list_offset + const_list_len;
         const seg_list_offset: u32 = const_source_offset + const_source_len;
-        ProgramROM.write_single(u32, self.seg_count);
-        ProgramROM.write_single(u32, self.ident_list.items.len);
-        ProgramROM.write_single(u32, replace_list_offset);
-        ProgramROM.write_single(u32, const_list_offset);
-        ProgramROM.write_single(u32, const_source_offset);
-        ProgramROM.write_single(u32, seg_list_offset);
-        ProgramROM.write_slice(IdentBlock, self.ident_list.items);
-        ProgramROM.write_slice(ReplaceSegment, self.replace_list.items);
-        ProgramROM.write_slice(ConstSegment, self.replace_list.items);
-        ProgramROM.write_slice(ConstSegment, self.replace_list.items);
-        ProgramROM.write_slice(u8, self.const_source.items);
-        ProgramROM.write_slice(u8, self.seg_list.items);
-        assert(len == ProgramROM.len - ptr);
+        program_rom.write_single(u32, self.seg_count);
+        program_rom.write_single(u32, @intCast(self.ident_list.items.len));
+        program_rom.write_single(u32, replace_list_offset);
+        program_rom.write_single(u32, const_list_offset);
+        program_rom.write_single(u32, const_source_offset);
+        program_rom.write_single(u32, seg_list_offset);
+        program_rom.write_slice(IdentBlock, self.ident_list.items);
+        program_rom.write_slice(ReplaceSegment, self.replace_list.items);
+        program_rom.write_slice(ConstSegment, self.const_list.items);
+        program_rom.write_slice(u8, self.const_source.items);
+        program_rom.write_slice(u8, self.seg_list.items);
+        assert(len == program_rom.len - ptr);
         return TemplateStringParseResult{
             .ptr = ptr,
             .len = len,
-            .tok = token,
+            .token = token,
             .t_string = Self{
                 .segment_count = self.seg_count,
-                .ident_count = self.ident_list.items.len,
+                .ident_count = @intCast(self.ident_list.items.len),
                 .replace_list_offset = replace_list_offset,
                 .const_list_offset = const_list_offset,
                 .const_source_offset = const_source_offset,
@@ -167,43 +167,43 @@ const TemplateStringLexed = struct {
                 true => {
                     switch (char.code) {
                         ASC.n => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE);
+                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch unreachable;
                         },
                         ASC.t => {
-                            const_builder.append(t_string.alloc, ASC.H_TAB);
+                            const_builder.append(t_string.alloc, ASC.H_TAB) catch unreachable;
                         },
                         ASC.r => {
-                            const_builder.append(t_string.alloc, ASC.CR);
+                            const_builder.append(t_string.alloc, ASC.CR) catch unreachable;
                         },
                         ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK, ASC.L_CURLY, ASC.R_CURLY => {
-                            const_builder.append(t_string.alloc, char.bytes[0]);
+                            const_builder.append(t_string.alloc, char.bytes[0]) catch unreachable;
                         },
                         ASC.o => {
                             const utf8 = source.read_next_n_bytes_as_octal_escape(notice_kind, 'o', 3);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
                         },
                         ASC.x => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'x', 2);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
                         },
                         ASC.u => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'u', 4);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
                         },
                         ASC.U => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'U', 8);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
                         },
                         else => {
                             source.add_illegal_string_escape_sequence_notice(notice_kind, char.code);
-                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]);
+                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
                         },
                     }
                 },
                 else => {
                     switch (char.code) {
                         ASC.NEWLINE => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE);
+                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch unreachable;
                             source.skip_whitespace_except_newline();
                             if (!source.is_complete()) {
                                 const next_byte = source.read_next_ascii(notice_kind);
@@ -211,7 +211,7 @@ const TemplateStringLexed = struct {
                                     ASC.BACKTICK => {},
                                     ASC.NEWLINE => {
                                         if (const_builder.items.len > 0) {
-                                            t_string.push_const_segment(const_builder.items.len);
+                                            t_string.push_const_segment(const_builder.items) catch unreachable;
                                             const_builder.clearAndFree(t_string.alloc);
                                         }
                                         source.add_runaway_multiline_notice(notice_kind);
@@ -225,7 +225,7 @@ const TemplateStringLexed = struct {
                                 }
                             } else {
                                 if (const_builder.items.len > 0) {
-                                    t_string.push_const_segment(const_builder.items.len);
+                                    t_string.push_const_segment(const_builder.items) catch unreachable;
                                     const_builder.clearAndFree(t_string.alloc);
                                 }
                                 source.add_source_end_before_string_end_notice(notice_kind);
@@ -238,7 +238,7 @@ const TemplateStringLexed = struct {
                         },
                         ASC.L_CURLY => {
                             if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items);
+                                t_string.push_const_segment(const_builder.items) catch unreachable;
                                 const_builder.clearRetainingCapacity();
                             }
                             const full_start = source.curr.pos;
@@ -247,13 +247,13 @@ const TemplateStringLexed = struct {
                             if (ident_result.illegal) {
                                 kind = TOK.ILLEGAL;
                             }
-                            var ident_idx = 0;
+                            var ident_idx: u32 = 0;
                             while (ident_idx < t_string.ident_list.items.len) {
                                 if (IdentBlock.eql(ident_result.ident, t_string.ident_list.items[ident_idx])) break;
                                 ident_idx += 1;
                             }
                             if (ident_idx == t_string.ident_list.items.len) {
-                                t_string.ident_list.append(t_string.alloc, ident_result.ident);
+                                t_string.ident_list.append(t_string.alloc, ident_result.ident) catch unreachable;
                             }
                             source.skip_whitespace();
                             const separator_or_end = source.read_next_ascii(notice_kind);
@@ -274,20 +274,20 @@ const TemplateStringLexed = struct {
                                 .start = format_start,
                                 .end = source.curr.pos,
                                 .input = ident_idx,
-                            });
+                            }) catch unreachable;
                         },
                         ASC.R_CURLY => {
                             kind = TOK.ILLEGAL;
-                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]);
+                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
                         },
                         ASC.DUBL_QUOTE => {
                             if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items);
+                                t_string.push_const_segment(const_builder.items) catch unreachable;
                             }
                             break :parseloop;
                         },
                         else => {
-                            const_builder.appendSlice(t_string.alloc, char.bytes[0..char.len]);
+                            const_builder.appendSlice(t_string.alloc, char.bytes[0..char.len]) catch unreachable;
                         },
                     }
                 },

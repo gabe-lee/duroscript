@@ -47,12 +47,9 @@ pub const F64 = struct {
 
     pub const POS_INF = std.math.inf(f64);
     pub const NEG_INF = -POS_INF;
-    pub const ZERO = 0.0;
+    pub const ZERO: f64 = 0.0;
 };
 
 pub const U64 = struct {
     pub const MAX = 0xFF_FF_FF_FF_FF_FF_FF_FF; // 18446744073709551615
 };
-
-
-

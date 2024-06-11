@@ -5,21 +5,23 @@ const assert = std.debug.assert;
 
 const Self = @This();
 
+alloc: Allocator,
 ptr: [*]u8,
 len: usize,
 cap: usize,
 
 const PAGE_SIZE = std.mem.page_size;
-const PAGE_SIZE_SHIFT = @ctz(PAGE_SIZE);
+const PAGE_SIZE_SHIFT = @ctz(@as(u64, PAGE_SIZE));
 const ALLOC = std.heap.page_allocator;
 const MAX_ALIGN = 8;
 
-var Global = Self.new(1);
+pub var global: Self = undefined;
 
 pub fn new(init_pages: usize) Self {
     const init_bytes = pages_to_capacity(init_pages);
     const mem_slice = ALLOC.alloc(u8, init_bytes) catch @panic("FAILED TO ALLOCATE MEMORY FOR PROGRAM ROM");
     return Self{
+        .alloc = ALLOC,
         .ptr = mem_slice.ptr,
         .len = 0,
         .cap = mem_slice.len,
@@ -40,7 +42,7 @@ pub fn prepare_space_for_write(self: *Self, add_bytes: usize, comptime need_alig
 pub fn write_single(self: *Self, comptime T: type, val: T) void {
     assert(self.len & (@alignOf(T) - 1) == 0);
     assert((self.cap - self.len) >= @sizeOf(T));
-    const dest_ptr: *T = @alignCast(self.ptr[self.len]);
+    const dest_ptr: *T = @ptrCast(@alignCast(&self.ptr[self.len]));
     dest_ptr.* = val;
     self.len += @sizeOf(T);
 }
@@ -48,7 +50,7 @@ pub fn write_single(self: *Self, comptime T: type, val: T) void {
 pub fn write_slice(self: *Self, comptime T: type, vals: []T) void {
     assert(self.len & (@alignOf(T) - 1) == 0);
     assert((self.cap - self.len) >= (@sizeOf(T) * vals.len));
-    const dest_ptr: [*]T = @alignCast(self.ptr[self.len]);
+    const dest_ptr: [*]T = @ptrCast(@alignCast(self.ptr));
     @memcpy(dest_ptr, vals);
     self.len += (@sizeOf(T) * vals.len);
 }

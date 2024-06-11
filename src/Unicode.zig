@@ -39,35 +39,35 @@ pub const REP_CHAR = 0xFFFD;
 pub const REP_CHAR_BYTES = [4]u8{ 0xEF, 0xBF, 0xBD, 0 };
 pub const REP_CHAR_LEN = 3;
 
-const BYTE_1_OF_1_PRE_MASK = 0b1_0000000;
-const BYTE_1_OF_1_PREFIX = 0b0_0000000;
-const BYTE_1_OF_1_VAL_MASK = 0b0_1111111;
-const BYTE_1_OF_1_MIN = 0b0_0000000;
-const BYTE_1_OF_1_MAX = 0b0_1111111;
+pub const BYTE_1_OF_1_PRE_MASK = 0b1_0000000;
+pub const BYTE_1_OF_1_PREFIX = 0b0_0000000;
+pub const BYTE_1_OF_1_VAL_MASK = 0b0_1111111;
+pub const BYTE_1_OF_1_MIN = 0b0_0000000;
+pub const BYTE_1_OF_1_MAX = 0b0_1111111;
 
-const CONT_BYTE_PRE_MASK = 0b11_000000;
-const CONT_BYTE_PREFIX = 0b10_000000;
-const CONT_BYTE_VAL_MASK = 0b00_111111;
-const CONT_BYTE_MIN = 0b10_000000;
-const CONT_BYTE_MAX = 0b10_111111;
+pub const CONT_BYTE_PRE_MASK = 0b11_000000;
+pub const CONT_BYTE_PREFIX = 0b10_000000;
+pub const CONT_BYTE_VAL_MASK = 0b00_111111;
+pub const CONT_BYTE_MIN = 0b10_000000;
+pub const CONT_BYTE_MAX = 0b10_111111;
 
-const BYTE_1_OF_2_PRE_MASK = 0b111_00000;
-const BYTE_1_OF_2_PREFIX = 0b110_00000;
-const BYTE_1_OF_2_VAL_MASK = 0b000_11111;
-const BYTE_1_OF_2_MIN = 0b110_00000;
-const BYTE_1_OF_2_MAX = 0b110_11111;
+pub const BYTE_1_OF_2_PRE_MASK = 0b111_00000;
+pub const BYTE_1_OF_2_PREFIX = 0b110_00000;
+pub const BYTE_1_OF_2_VAL_MASK = 0b000_11111;
+pub const BYTE_1_OF_2_MIN = 0b110_00000;
+pub const BYTE_1_OF_2_MAX = 0b110_11111;
 
-const BYTE_1_OF_3_PRE_MASK = 0b1111_0000;
-const BYTE_1_OF_3_PREFIX = 0b1110_0000;
-const BYTE_1_OF_3_VAL_MASK = 0b0000_1111;
-const BYTE_1_OF_3_MIN = 0b1110_0000;
-const BYTE_1_OF_3_MAX = 0b1110_1111;
+pub const BYTE_1_OF_3_PRE_MASK = 0b1111_0000;
+pub const BYTE_1_OF_3_PREFIX = 0b1110_0000;
+pub const BYTE_1_OF_3_VAL_MASK = 0b0000_1111;
+pub const BYTE_1_OF_3_MIN = 0b1110_0000;
+pub const BYTE_1_OF_3_MAX = 0b1110_1111;
 
-const BYTE_1_OF_4_PRE_MASK = 0b11111_000;
-const BYTE_1_OF_4_PREFIX = 0b11110_000;
-const BYTE_1_OF_4_VAL_MASK = 0b00000_111;
-const BYTE_1_OF_4_MIN = 0b11110_000;
-const BYTE_1_OF_4_MAX = 0b11110_111;
+pub const BYTE_1_OF_4_PRE_MASK = 0b11111_000;
+pub const BYTE_1_OF_4_PREFIX = 0b11110_000;
+pub const BYTE_1_OF_4_VAL_MASK = 0b00000_111;
+pub const BYTE_1_OF_4_MIN = 0b11110_000;
+pub const BYTE_1_OF_4_MAX = 0b11110_111;
 
 pub const MIN_1_BYTE_CODE_POINT = 0x0;
 pub const MAX_1_BYTE_CODE_POINT = 0x7F;
@@ -87,25 +87,25 @@ pub inline fn is_valid_codepoint(code: u32) bool {
 
 pub fn encode_valid_codepoint(code: u32) UTF8_EncodeResult {
     return switch (code) {
-        MIN_1_BYTE_CODE_POINT...MAX_1_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u4{
+        MIN_1_BYTE_CODE_POINT...MAX_1_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u8{
             @truncate(code),
             0,
             0,
             0,
         }, 1),
-        MIN_2_BYTE_CODE_POINT...MAX_2_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u4{
+        MIN_2_BYTE_CODE_POINT...MAX_2_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u8{
             (@as(u8, @truncate(code >> 6)) & BYTE_1_OF_2_VAL_MASK) | BYTE_1_OF_2_PREFIX,
             (@as(u8, @truncate(code)) & CONT_BYTE_VAL_MASK) | CONT_BYTE_PREFIX,
             0,
             0,
         }, 2),
-        MIN_3_BYTE_CODE_POINT...MAX_3_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u4{
+        MIN_3_BYTE_CODE_POINT...MAX_3_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u8{
             (@as(u8, @truncate(code >> 12)) & BYTE_1_OF_3_VAL_MASK) | BYTE_1_OF_3_PREFIX,
             (@as(u8, @truncate(code >> 6)) & CONT_BYTE_VAL_MASK) | CONT_BYTE_PREFIX,
             (@as(u8, @truncate(code)) & CONT_BYTE_VAL_MASK) | CONT_BYTE_PREFIX,
             0,
         }, 3),
-        MIN_4_BYTE_CODE_POINT...MAX_4_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u4{
+        MIN_4_BYTE_CODE_POINT...MAX_4_BYTE_CODE_POINT => UTF8_EncodeResult.new([4]u8{
             (@as(u8, @truncate(code >> 18)) & BYTE_1_OF_4_VAL_MASK) | BYTE_1_OF_4_PREFIX,
             (@as(u8, @truncate(code >> 12)) & CONT_BYTE_VAL_MASK) | CONT_BYTE_PREFIX,
             (@as(u8, @truncate(code >> 6)) & CONT_BYTE_VAL_MASK) | CONT_BYTE_PREFIX,

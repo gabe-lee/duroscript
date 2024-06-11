@@ -43,7 +43,7 @@ pub const NoticeManager = struct {
         self.error_list.append(NoticeAlloc.allocator(), Notice{
             .location = loc,
             .message = msg,
-        });
+        }) catch @panic("COULD NOT APPEND TO ERROR LIST");
         return;
     }
 
@@ -52,7 +52,7 @@ pub const NoticeManager = struct {
         self.error_list.append(NoticeAlloc.allocator(), Notice{
             .location = loc,
             .message = msg,
-        });
+        }) catch @panic("COULD NOT APPEND TO WARN LIST");
         return;
     }
 
@@ -61,13 +61,13 @@ pub const NoticeManager = struct {
         self.error_list.append(NoticeAlloc.allocator(), Notice{
             .location = loc,
             .message = msg,
-        });
+        }) catch @panic("COULD NOT APPEND TO HINT LIST");
         return;
     }
 };
 
 pub var Notices = NoticeManager{
-    .error_list = ListUm(Notice).init(NoticeAlloc.allocator()),
-    .warn_list = ListUm(Notice).init(NoticeAlloc.allocator()),
-    .hint_list = ListUm(Notice).init(NoticeAlloc.allocator()),
+    .error_list = ListUm(Notice){},
+    .warn_list = ListUm(Notice){},
+    .hint_list = ListUm(Notice){},
 };
