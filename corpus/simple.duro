@@ -1,0 +1,24 @@
+import std;
+import std.math as math;
+
+const PI: f32 = 3.1415;
+const MEANING_OF_LIFE: u32 = 42;
+const CHAR = 0x0A;
+const LANG: str = "en-us";
+const NAME: str = "Gabe";
+const GREETING: template = $"Hello {NAME}, the following options are available:
+    `\t- Continue working your dead-end job
+    `\t- Get a job you love and pays well";
+const DISPLAY:str = "\nYou will now be shown the results of the test program:\n";
+
+# the main entry point of the program
+func main() none {
+    std.print(GREETING);
+    std.print(DISPLAY);
+    var x: u32 = 0;
+    while (var i: u32 = 0; i > 0; i += 1) {
+        std.fprint($"i = {i}, x = {x}", {i, x});
+        x += i;
+    }
+    return;
+}

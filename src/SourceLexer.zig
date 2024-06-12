@@ -13,6 +13,7 @@ const SourceReader = @import("./SourceReader.zig");
 const TemplateString = @import("./TemplateString.zig");
 const SlowParseBuffer = Float.SlowParseBuffer;
 const NoticeManager = @import("./NoticeManager.zig");
+const IdentManager = @import("./IdentManager.zig");
 const NOTICE = NoticeManager.KIND;
 
 const ProgramROM = @import("./ProgramROM.zig");
@@ -28,11 +29,14 @@ pub fn new(source: []u8, source_name: []const u8, source_key: u16) Self {
 }
 
 pub fn next_token(self: *Self) Token {
-    const program_rom = &ProgramROM.global;
     self.source.skip_whitespace();
     if (self.source.is_complete()) {
         var token = TokenBuilder.new(self.source_key, self.source);
         return self.finish_token_kind(TOK.EOF, &token);
+    }
+    if (self.source.source[self.source.curr.pos] == ASC.HASH) {
+        self.source.skip_until_byte_match(ASC.NEWLINE);
+        self.source.skip_whitespace();
     }
     var token_builder = TokenBuilder.new(self.source_key, self.source);
     var token = &token_builder;
@@ -305,12 +309,20 @@ pub fn next_token(self: *Self) Token {
         ASC._0...ASC._9 => return self.handle_number_literal(token, false, byte_1),
         ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
             self.source.rollback_position();
+            const ident_start = self.source.curr.pos;
             const ident_result = IdentBlock.parse_from_source(&self.source, NOTICE.ERROR);
+            const ident_end = self.source.curr.pos;
             if (ident_result.illegal) return self.finish_token_kind(TOK.ILLEGAL, token);
-            program_rom.prepare_space_for_write(@sizeOf(IdentBlock), @alignOf(IdentBlock));
-            const ptr: u64 = @bitCast(program_rom.len);
-            program_rom.write_single(IdentBlock, ident_result.ident);
-            token.set_data(ptr, 1, 0);
+            if (ident_result.len <= Token.LONGEST_KEYWORD) {
+                for (Token.KW_U64_SLICES_BY_LEN[ident_result.len], Token.KW_TOKEN_SLICES_BY_LEN[ident_result.len], Token.KW_IMPLICIT_SLICES_BY_LEN[ident_result.len]) |keyword, kind, implicit| {
+                    if (ident_result.ident.data[0] == keyword) {
+                        token.set_data(implicit, 0, 0);
+                        return self.finish_token_kind(kind, token);
+                    }
+                }
+            }
+            const ident_key = IdentManager.global.get_ident_index(ident_result.ident, self.source.source[ident_start..ident_end]);
+            token.set_data(ident_key, 1, 0);
             return self.finish_token_kind(TOK.IDENT, token);
         },
         ASC.DOLLAR => {
@@ -348,40 +360,49 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
                 switch (char.code) {
                     ASC.n => {
                         string.append(alloc, ASC.NEWLINE) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.t => {
                         string.append(alloc, ASC.H_TAB) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.r => {
                         string.append(alloc, ASC.CR) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK => {
                         string.append(alloc, char.bytes[0]) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.o => {
                         const utf8 = self.source.read_next_n_bytes_as_octal_escape(NOTICE.ERROR, 'o', 3);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.x => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'x', 2);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.u => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'u', 4);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                        is_escape = false;
                     },
                     ASC.U => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'U', 8);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                        is_escape = false;
                     },
                     else => {
                         self.source.add_illegal_string_escape_sequence_notice(NOTICE.ERROR, char.code);
                         kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
+                        is_escape = false;
                     },
                 }
             },

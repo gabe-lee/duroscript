@@ -1,5 +1,10 @@
 // const A = @import("./Ascii.zig");
 const IdentBlock = @import("./IdentBlock.zig");
+const std = @import("std");
+const ProgramROM = @import("./ProgramROM.zig");
+const NOTICE = @import("./NoticeManager.zig").KIND;
+const SourceReader = @import("./SourceReader.zig");
+const IdentManager = @import("./IdentManager.zig");
 
 const Self = @This();
 
@@ -131,103 +136,113 @@ pub const KIND = enum(u8) {
     ILLEGAL, // TL
 };
 
-pub const WARN = enum(u8) {
-    NONE,
-    WARN_AMBIGUOUS_SATURATION,
-    WARN_AMBIGUOUS_ZERO,
-    WARN_UTF8_ILLEGAL_FIRST_BYTE,
-    WARN_UTF8_MISSING_CONTINUATION_BYTE,
-    WARN_UTF8_UNEXPECTED_CONTINUATION_BYTE,
-    WARN_UTF8_ILLEGAL_CHAR_CODE,
-    WARN_UTF8_SOURCE_ENDED_EARLY,
-    WARN_UTF8_OVERLONG_ENCODING,
-    ILLEGAL_OPERATOR,
-    ILLEGAL_BYTE,
-    ILLEGAL_FIRST_CHAR_FOR_TOKEN,
-    ILLEGAL_ALPHANUM_IN_BINARY,
-    ILLEGAL_ALPHANUM_IN_OCTAL,
-    ILLEGAL_ALPHANUM_IN_HEX,
-    ILLEGAL_ALPHANUM_IN_DECIMAL,
-    ILLEGAL_NUMBER_LITERAL_OVERFLOWS_64_BITS,
-    ILLEGAL_NUMBER_LITERAL_NO_SIGNIFICANT_BITS,
-    ILLEGAL_INTEGER_LITERAL_LOSS_OF_DATA,
-    ILLEGAL_INTEGER_LITERAL_NEG_OVERFLOWS_I64,
-    ILLEGAL_FLOAT_LITERAL_TOO_LARGE,
-    ILLEGAL_FLOAT_LITERAL_TOO_SMALL,
-    ILLEGAL_FLOAT_TOO_MANY_SIG_DIGITS,
-    ILLEGAL_NUMBER_TOO_MANY_DOTS,
-    ILLEGAL_IDENT_TOO_LONG,
-    ILLEGAL_IDENT_BEGINS_WITH_DIGIT,
-    ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
-    ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
-    ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
-    ILLEGAL_STRING_NO_END_QUOTE,
-    ILLEGAL_STRING_ESCAPE_SEQUENCE,
-    ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK,
-    ILLEGAL_STRING_FILE_ENDED_BEFORE_TERMINAL_CHAR,
-    ILLEGAL_STRING_OCTAL_ESCAPE,
-    ILLEGAL_STRING_HEX_ESCAPE,
-    ILLEGAL_STRING_SHORT_UNICODE_ESCAPE,
-    ILLEGAL_STRING_LONG_UNICODE_ESCAPE,
-    ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES,
-    ILLEGAL_STRING_MULTI_R_CURLY_MUST_ESCAPE,
-};
-pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
-pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
+// pub const WARN = enum(u8) {
+//     NONE,
+//     WARN_AMBIGUOUS_SATURATION,
+//     WARN_AMBIGUOUS_ZERO,
+//     WARN_UTF8_ILLEGAL_FIRST_BYTE,
+//     WARN_UTF8_MISSING_CONTINUATION_BYTE,
+//     WARN_UTF8_UNEXPECTED_CONTINUATION_BYTE,
+//     WARN_UTF8_ILLEGAL_CHAR_CODE,
+//     WARN_UTF8_SOURCE_ENDED_EARLY,
+//     WARN_UTF8_OVERLONG_ENCODING,
+//     ILLEGAL_OPERATOR,
+//     ILLEGAL_BYTE,
+//     ILLEGAL_FIRST_CHAR_FOR_TOKEN,
+//     ILLEGAL_ALPHANUM_IN_BINARY,
+//     ILLEGAL_ALPHANUM_IN_OCTAL,
+//     ILLEGAL_ALPHANUM_IN_HEX,
+//     ILLEGAL_ALPHANUM_IN_DECIMAL,
+//     ILLEGAL_NUMBER_LITERAL_OVERFLOWS_64_BITS,
+//     ILLEGAL_NUMBER_LITERAL_NO_SIGNIFICANT_BITS,
+//     ILLEGAL_INTEGER_LITERAL_LOSS_OF_DATA,
+//     ILLEGAL_INTEGER_LITERAL_NEG_OVERFLOWS_I64,
+//     ILLEGAL_FLOAT_LITERAL_TOO_LARGE,
+//     ILLEGAL_FLOAT_LITERAL_TOO_SMALL,
+//     ILLEGAL_FLOAT_TOO_MANY_SIG_DIGITS,
+//     ILLEGAL_NUMBER_TOO_MANY_DOTS,
+//     ILLEGAL_IDENT_TOO_LONG,
+//     ILLEGAL_IDENT_BEGINS_WITH_DIGIT,
+//     ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
+//     ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
+//     ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
+//     ILLEGAL_STRING_NO_END_QUOTE,
+//     ILLEGAL_STRING_ESCAPE_SEQUENCE,
+//     ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK,
+//     ILLEGAL_STRING_FILE_ENDED_BEFORE_TERMINAL_CHAR,
+//     ILLEGAL_STRING_OCTAL_ESCAPE,
+//     ILLEGAL_STRING_HEX_ESCAPE,
+//     ILLEGAL_STRING_SHORT_UNICODE_ESCAPE,
+//     ILLEGAL_STRING_LONG_UNICODE_ESCAPE,
+//     ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES,
+//     ILLEGAL_STRING_MULTI_R_CURLY_MUST_ESCAPE,
+// };
+// pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
+// pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
 
-pub const KW_TABLE_1 = [_].{ *const [1:0]u8, KIND, u64 }{
-    .{ "_", KIND.DEFAULT, 0 },
+pub const LONGEST_KEYWORD = 8;
+const KW_TUPLE_1 = struct { id: *const [1:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_2 = struct { id: *const [2:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_3 = struct { id: *const [3:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_4 = struct { id: *const [4:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_5 = struct { id: *const [5:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_6 = struct { id: *const [6:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_7 = struct { id: *const [7:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_8 = struct { id: *const [8:0]u8, k: KIND, v: u64 };
+
+pub const KW_TABLE_1 = [_]KW_TUPLE_1{
+    .{ .id = "_", .k = KIND.DEFAULT, .v = 0 },
 };
-pub const KW_TABLE_2 = [_].{ *const [2:0]u8, KIND, u64 }{
-    .{ "as", KIND.AS, 0 },
-    .{ "in", KIND.IN, 0 },
-    .{ "u8", KIND.U8, 0 },
-    .{ "i8", KIND.I8, 0 },
-    .{ "if", KIND.IF, 0 },
+pub const KW_TABLE_2 = [_]KW_TUPLE_2{
+    .{ .id = "as", .k = KIND.AS, .v = 0 },
+    .{ .id = "in", .k = KIND.IN, .v = 0 },
+    .{ .id = "u8", .k = KIND.U8, .v = 0 },
+    .{ .id = "i8", .k = KIND.I8, .v = 0 },
+    .{ .id = "if", .k = KIND.IF, .v = 0 },
 };
-pub const KW_TABLE_3 = [_].{ *const [3:0]u8, KIND, u64 }{
-    .{ "var", KIND.VAR, 0 },
-    .{ "std", KIND.STDLIB, 0 },
-    .{ "u16", KIND.U16, 0 },
-    .{ "i16", KIND.I16, 0 },
-    .{ "u32", KIND.U32, 0 },
-    .{ "i32", KIND.I32, 0 },
-    .{ "u64", KIND.U64, 0 },
-    .{ "i64", KIND.I64, 0 },
-    .{ "f32", KIND.F32, 0 },
-    .{ "f64", KIND.F64, 0 },
+pub const KW_TABLE_3 = [_]KW_TUPLE_3{
+    .{ .id = "var", .k = KIND.VAR, .v = 0 },
+    .{ .id = "std", .k = KIND.STDLIB, .v = 0 },
+    .{ .id = "u16", .k = KIND.U16, .v = 0 },
+    .{ .id = "i16", .k = KIND.I16, .v = 0 },
+    .{ .id = "u32", .k = KIND.U32, .v = 0 },
+    .{ .id = "i32", .k = KIND.I32, .v = 0 },
+    .{ .id = "u64", .k = KIND.U64, .v = 0 },
+    .{ .id = "i64", .k = KIND.I64, .v = 0 },
+    .{ .id = "f32", .k = KIND.F32, .v = 0 },
+    .{ .id = "f64", .k = KIND.F64, .v = 0 },
 };
-pub const KW_TABLE_4 = [_].{ *const [4:0]u8, KIND, u64 }{
-    .{ "func", KIND.FUNC, 0 },
-    .{ "bool", KIND.BOOL, 0 },
-    .{ "type", KIND.TYPE, 0 },
-    .{ "true", KIND.LIT_BOOL, 1 },
-    .{ "none", KIND.NONE, 0 },
-    .{ "enum", KIND.ENUM, 0 },
-    .{ "else", KIND.ELSE, 0 },
+pub const KW_TABLE_4 = [_]KW_TUPLE_4{
+    .{ .id = "func", .k = KIND.FUNC, .v = 0 },
+    .{ .id = "bool", .k = KIND.BOOL, .v = 0 },
+    .{ .id = "type", .k = KIND.TYPE, .v = 0 },
+    .{ .id = "true", .k = KIND.LIT_BOOL, .v = 1 },
+    .{ .id = "none", .k = KIND.NONE, .v = 0 },
+    .{ .id = "enum", .k = KIND.ENUM, .v = 0 },
+    .{ .id = "else", .k = KIND.ELSE, .v = 0 },
 };
-pub const KW_TABLE_5 = [_].{ *const [5:0]u8, KIND, u64 }{
-    .{ "const", KIND.CONST, 0 },
-    .{ "while", KIND.WHILE, 0 },
-    .{ "break", KIND.BREAK, 0 },
-    .{ "false", KIND.LIT_BOOL, 0 },
-    .{ "union", KIND.UNION, 0 },
-    .{ "tuple", KIND.TUPLE, 0 },
-    .{ "match", KIND.MATCH, 0 },
-    .{ "flags", KIND.FLAGS, 0 },
+pub const KW_TABLE_5 = [_]KW_TUPLE_5{
+    .{ .id = "const", .k = KIND.CONST, .v = 0 },
+    .{ .id = "while", .k = KIND.WHILE, .v = 0 },
+    .{ .id = "break", .k = KIND.BREAK, .v = 0 },
+    .{ .id = "false", .k = KIND.LIT_BOOL, .v = 0 },
+    .{ .id = "union", .k = KIND.UNION, .v = 0 },
+    .{ .id = "tuple", .k = KIND.TUPLE, .v = 0 },
+    .{ .id = "match", .k = KIND.MATCH, .v = 0 },
+    .{ .id = "flags", .k = KIND.FLAGS, .v = 0 },
 };
-pub const KW_TABLE_6 = [_].{ *const [6:0]u8, KIND, u64 }{
-    .{ "import", KIND.IMPORT, 0 },
-    .{ "return", KIND.RETURN, 0 },
-    .{ "struct", KIND.STRUCT, 0 },
-    .{ "string", KIND.STRING, 0 },
+pub const KW_TABLE_6 = [_]KW_TUPLE_6{
+    .{ .id = "import", .k = KIND.IMPORT, .v = 0 },
+    .{ .id = "return", .k = KIND.RETURN, .v = 0 },
+    .{ .id = "struct", .k = KIND.STRUCT, .v = 0 },
+    .{ .id = "string", .k = KIND.STRING, .v = 0 },
 };
-pub const KW_TABLE_7 = [_].{ *const [7:0]u8, KIND, u64 }{
-    .{ "foreach", KIND.FOR_EACH, 0 },
+pub const KW_TABLE_7 = [_]KW_TUPLE_7{
+    .{ .id = "foreach", .k = KIND.FOR_EACH, .v = 0 },
 };
-pub const KW_TABLE_8 = [_].{ *const [8:0]u8, KIND, u64 }{
-    .{ "nextloop", KIND.NEXT_LOOP, 0 },
-    .{ "template", KIND.NEXT_LOOP, 0 },
+pub const KW_TABLE_8 = [_]KW_TUPLE_8{
+    .{ .id = "nextloop", .k = KIND.NEXT_LOOP, .v = 0 },
+    .{ .id = "template", .k = KIND.TEMPLATE, .v = 0 },
 };
 
 pub const TOTAL_KW_COUNT = KW_TABLE_1.len + KW_TABLE_2.len + KW_TABLE_3.len + KW_TABLE_4.len + KW_TABLE_5.len + KW_TABLE_6.len + KW_TABLE_7.len + KW_TABLE_8.len;
@@ -247,49 +262,49 @@ pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     for (KW_TABLE_1) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
-        out[i] = IdentBlock.parse_from_source(kw[0]).ident.data[0];
+        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
         i += 1;
     }
     break :eval out;
@@ -299,35 +314,35 @@ pub const KW_TOKEN_TABLE: [TOTAL_KW_COUNT]KIND = eval: {
     var out: [TOTAL_KW_COUNT]KIND = undefined;
     var i = 0;
     for (KW_TABLE_1) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
-        out[i] = kw[1];
+        out[i] = kw.k;
         i += 1;
     }
     break :eval out;
@@ -337,35 +352,35 @@ pub const KW_IMPLICIT_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     var out: [TOTAL_KW_COUNT]u64 = undefined;
     var i = 0;
     for (KW_TABLE_1) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
-        out[i] = kw[2];
+        out[i] = kw.v;
         i += 1;
     }
     break :eval out;
@@ -381,7 +396,7 @@ pub const KW_U64_SLICES_BY_LEN = [9][]const u64{
     KW_U64_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
     KW_U64_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
 };
-pub const KW_TOKEN_SLICES_BY_LEN = [9][]const u64{
+pub const KW_TOKEN_SLICES_BY_LEN = [9][]const KIND{
     KW_TOKEN_TABLE[0..0], // 0 char slice
     KW_TOKEN_TABLE[KW_SLICE_1_START..KW_SLICE_2_START], // 1 char slice
     KW_TOKEN_TABLE[KW_SLICE_2_START..KW_SLICE_3_START], // 2 char slice
@@ -403,3 +418,40 @@ pub const KW_IMPLICIT_SLICES_BY_LEN = [9][]const u64{
     KW_IMPLICIT_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
     KW_IMPLICIT_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
 };
+
+pub const KIND_NAME: [@typeInfo(KIND).Enum.fields.len][]const u8 = compute: {
+    var table: [@typeInfo(KIND).Enum.fields.len][]const u8 = undefined;
+    for (@typeInfo(KIND).Enum.fields, 0..) |f, i| {
+        table[i] = f.name;
+    }
+    break :compute table;
+};
+
+pub fn debug_print(self: *const Self) void {
+    const name = KIND_NAME[@intFromEnum(self.kind)];
+    switch (self.kind) {
+        KIND.LIT_INTEGER,
+        => {
+            if (self.data_extra == 1) { // negative
+                std.debug.print("{s}({d}) ", .{ name, -@as(i64, @bitCast(self.data_val_or_ptr)) });
+            } else {
+                std.debug.print("{s}({d}) ", .{ name, self.data_val_or_ptr });
+            }
+        },
+        KIND.LIT_FLOAT => {
+            std.debug.print("{s}({d}) ", .{ name, @as(f64, @bitCast(self.data_val_or_ptr)) });
+        },
+        KIND.LIT_BOOL => {
+            std.debug.print("{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(self.data_val_or_ptr)))) });
+        },
+        KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
+            std.debug.print("{s}({s}) ", .{ name, ProgramROM.global.ptr[self.data_val_or_ptr .. self.data_val_or_ptr + self.data_len] });
+        },
+        KIND.IDENT => {
+            std.debug.print("{s}({s}) ", .{ name, IdentManager.global.ident_names.items[self.data_val_or_ptr] });
+        },
+        else => {
+            std.debug.print("{s} ", .{name});
+        },
+    }
+}

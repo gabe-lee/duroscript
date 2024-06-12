@@ -1,0 +1,37 @@
+const SUB_STRING_NAMED = $"This is a substitution string with a {named:s} replacement string and {another}";
+const SUB_STRING_LITERAL_DOLLAR = $"This is a substitution string has literal \{ and \} signs in it {s}";
+const SUB_STRING_ILLEGAL = $"This is an illegal substitution string because it has no substitutions (use a regular string instead)";
+const SUB_STRING_ILLEGAL_2 = $"These are illegal substitution formats {}_{something:}_{:}_{:d}_{=}_{:=}_{a=3}_{num:b=}_ } _ { _ { _";
+const NORMAL_STRING = "This is a normal string";
+const NORMAL_STRING_NO_REPlACE_ESCAPE = "In a normal string, the { and } symbols don't need to be escaped"
+const LEGAL_ESCAPES = "_\\_\"_\`_\n_\t_\r_\o777_\xAb_\uABcd_\U12FF34EE_";
+const ILLEGAL_ESCAPES = "_\'_\w_\y_\1_\m_\oA77_\xZ9_\uG123_\Uxyz987AB_\{_\}_";
+const LEGAL_MULTILINE = "this string is a multiline string, 
+    `every newline ignores all whitespace until the first \` character on that line
+    `and if the line encounters ANY non-whitespace OR a second newline before the first \` it is illegal,
+    `this prevents token/syntax lexing from consuming your entire source file if you forget to terminate a multiline string";
+const ILLEGAL_MULTILINE = "this string is an ILLEGAL multiline string, the next line never terminates, but it shouldn't stretch down the entire file
+const ILLEGAL_MULTILINE_2 = "this string is also an illegal multiline, the next line doesnt use a \` before 
+    it starts the next line of text";
+const ILLEGAL_MULTILINE_3 = "this string is also an illegal multiline, the next line has non-whitespace
+chars `before the first \` on the line";
+const LEGAL_REPLACEMENT_MULTILINE = $"this string is a multiline string with replacements {x}, 
+    `even the newlines accept {replacement} escapes
+    `of all kinds {d:x} ... {  dogs_i_have_42  : mean = 1 ,  big=3  , dead,smell=yuck,also,oneMore,sas=10,  }";
+const ILLEGAL_REPLACEMENT_MULTILINE = $"illegal multiline replacement strings 
+    `also terminate after one malformed line (newline then any non-whitespace before \` or 2 newlines before \`)
+    and do not swallow the entire rest of the file {d}";
+const SINGLE_CHAR = 'a';
+const SINGLE_EMOJI = '🏆';
+const SINGLE_CHAR_ESCAPED = '\x60';
+const SINGLE_CHAR_ESCAPED_2 = '\o777';
+const SINGLE_CHAR_ESCAPED_3 = '\uABcd';
+const SINGLE_CHAR_ESCAPED_4 = '\U1234ABcd';
+const SINGLE_CHAR_ESCAPED_5 = '\t';
+const SINGLE_CHAR_ESCAPED_6 = '\'';
+const SINGLE_CHAR_ESCAPED_7 = '\\';
+const SINGLE_CHAR_ILLEGAL_ESCAPED = '\"';
+const SINGLE_CHAR_ILLEGAL_ESCAPED_2 = '\o999';
+const SINGLE_CHAR_ILLEGAL_ESCAPED_3 = '\xA';
+const SINGLE_CHAR_ILLEGAL_ESCAPED_4 = '\';
+const ILLEGAL_SINGLE_CHAR_TOO_LONG = 'single chars cannot hold more than one unicode char = 4 bytes = u32';

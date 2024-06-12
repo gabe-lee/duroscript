@@ -2,6 +2,7 @@ const std = @import("std");
 const PageAllocator = std.heap.PageAllocator;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
+const DEBUG = std.debug.print;
 
 const Self = @This();
 
@@ -9,6 +10,7 @@ alloc: Allocator,
 ptr: [*]u8,
 len: usize,
 cap: usize,
+waste: usize,
 
 const PAGE_SIZE = std.mem.page_size;
 const PAGE_SIZE_SHIFT = @ctz(@as(u64, PAGE_SIZE));
@@ -25,6 +27,7 @@ pub fn new(init_pages: usize) Self {
         .ptr = mem_slice.ptr,
         .len = 0,
         .cap = mem_slice.len,
+        .waste = 0,
     };
 }
 
@@ -37,12 +40,15 @@ pub fn prepare_space_for_write(self: *Self, add_bytes: usize, comptime need_alig
         self.ptr = new_mem_slice.ptr;
         self.cap = new_mem_slice.len;
     }
+    self.len += advance_count;
+    self.waste += advance_count;
+    assert(self.len & (need_align - 1) == 0);
 }
 
 pub fn write_single(self: *Self, comptime T: type, val: T) void {
     assert(self.len & (@alignOf(T) - 1) == 0);
     assert((self.cap - self.len) >= @sizeOf(T));
-    const dest_ptr: *T = @ptrCast(@alignCast(&self.ptr[self.len]));
+    const dest_ptr: *T = @ptrCast(@alignCast(self.ptr + self.len));
     dest_ptr.* = val;
     self.len += @sizeOf(T);
 }

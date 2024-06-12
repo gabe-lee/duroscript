@@ -8,6 +8,10 @@ var NoticeAlloc = Arena.init(std.heap.page_allocator);
 pub const Notice = struct {
     message: []const u8,
     location: SourceRange,
+
+    pub fn string(self: *const Notice) []const u8 {
+        return std.fmt.allocPrint(NoticeAlloc.allocator(), "ERROR: {s}:{d}:{d}\n{s}", .{ self.location.source_name, self.location.start.row + 1, self.location.start.col + 1, self.message }) catch "ERROR: COULD NOT PRINT ERROR :(";
+    }
 };
 
 pub const KIND = enum(u8) {

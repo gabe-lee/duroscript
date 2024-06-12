@@ -6,6 +6,7 @@ const ASC = UNI.ASCII;
 const NoticeManager = @import("./NoticeManager.zig");
 const NOTICE = NoticeManager.KIND;
 const nkind_string = NoticeManager.kind_string;
+const DEBUG = std.debug.print;
 
 const Self = @This();
 
@@ -181,9 +182,7 @@ pub fn rollback_position(self: *Self) void {
 
 pub fn add_illegal_string_escape_sequence_notice(self: *Self, comptime notice_kind: NOTICE, code: u32) void {
     NoticeManager.Notices.add_notice(notice_kind, SourceRange.new(self.source_name, self.prev, self.curr),
-        \\  Expected valid string escape sequence, found unknown escape sequence (possibly a valid escape sequence in an invalid context)
-        \\  EXPECTED: escape == '\\n', '\\t', '\\r', '\\o', '\\x', '\\u', '\\U', or context-specific escapes '\\\x7B', '\\\x7D', '\\"', '\\'', '\\`'
-        \\  FOUND:    escape == '\\{u}'
+        \\  Expected valid string escape sequence, found unknown escape sequence "\{u}" (possibly a valid escape sequence in an invalid context)
     , .{@as(u21, @intCast(code))});
 }
 
@@ -496,8 +495,9 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NOTI
         return self.next_utf8;
     }
     var code: u8 = 0;
-    var bit: u8 = (n - 1) * 3;
+    var bit: u8 = n * 3;
     for (0..n) |i| {
+        bit -= 3;
         const byte = self.source[self.curr.pos + i];
         const val = switch (byte) {
             ASC._0...ASC._7 => byte - ASC._0,
@@ -510,7 +510,6 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime notice_kind: NOTI
             },
         };
         code |= val << @intCast(bit);
-        bit -= 3;
     }
     if (!U.is_valid_codepoint(code)) {
         self.curr.advance_n_cols(n, n);
@@ -540,11 +539,12 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NOTICE
         self.next_utf8 = UTF8_Read_Result.replace_char();
         return self.next_utf8;
     }
-    var code: u8 = 0;
-    var bit: u8 = (n - 1) * 4;
+    var code: u32 = 0;
+    var bit: u8 = n * 4;
     for (0..n) |i| {
+        bit -= 4;
         const byte = self.source[self.curr.pos + i];
-        const val = switch (byte) {
+        const val: u32 = switch (byte) {
             ASC._0...ASC._9 => byte - ASC._0,
             ASC.A...ASC.F => (byte - ASC.A) + 10,
             ASC.a...ASC.f => (byte - ASC.a) + 10,
@@ -557,7 +557,6 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime notice_kind: NOTICE
             },
         };
         code |= val << @intCast(bit);
-        bit -= 4;
     }
     if (!U.is_valid_codepoint(code)) {
         self.curr.advance_n_cols(n, n);

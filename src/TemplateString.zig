@@ -165,6 +165,7 @@ const TemplateStringLexed = struct {
             const char = source.read_next_utf8_char(notice_kind);
             switch (is_escape) {
                 true => {
+                    is_escape = false;
                     switch (char.code) {
                         ASC.n => {
                             const_builder.append(t_string.alloc, ASC.NEWLINE) catch unreachable;
