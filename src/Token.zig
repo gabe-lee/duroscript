@@ -5,6 +5,8 @@ const ProgramROM = @import("./ProgramROM.zig");
 const NOTICE = @import("./NoticeManager.zig").KIND;
 const SourceReader = @import("./SourceReader.zig");
 const IdentManager = @import("./IdentManager.zig");
+const Allocator = std.mem.Allocator;
+const List = std.ArrayListUnmanaged;
 
 const Self = @This();
 
@@ -427,31 +429,41 @@ pub const KIND_NAME: [@typeInfo(KIND).Enum.fields.len][]const u8 = compute: {
     break :compute table;
 };
 
-pub fn debug_print(self: *const Self) void {
-    const name = KIND_NAME[@intFromEnum(self.kind)];
-    switch (self.kind) {
-        KIND.LIT_INTEGER,
-        => {
-            if (self.data_extra == 1) { // negative
-                std.debug.print("{s}({d}) ", .{ name, -@as(i64, @bitCast(self.data_val_or_ptr)) });
-            } else {
-                std.debug.print("{s}({d}) ", .{ name, self.data_val_or_ptr });
-            }
-        },
-        KIND.LIT_FLOAT => {
-            std.debug.print("{s}({d}) ", .{ name, @as(f64, @bitCast(self.data_val_or_ptr)) });
-        },
-        KIND.LIT_BOOL => {
-            std.debug.print("{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(self.data_val_or_ptr)))) });
-        },
-        KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
-            std.debug.print("{s}({s}) ", .{ name, ProgramROM.global.ptr[self.data_val_or_ptr .. self.data_val_or_ptr + self.data_len] });
-        },
-        KIND.IDENT => {
-            std.debug.print("{s}({s}) ", .{ name, IdentManager.global.ident_names.items[self.data_val_or_ptr] });
-        },
-        else => {
-            std.debug.print("{s} ", .{name});
-        },
+pub fn dump_token_list(alloc: Allocator, original_file: []const u8, list: *List(Self)) !void {
+    const out_file = try std.fs.cwd().createFile(try std.fmt.allocPrint(alloc, "{s}.tokens.produced", .{original_file}), .{});
+    defer out_file.close();
+    var row: u32 = 0;
+    for (list.items) |token| {
+        const name = KIND_NAME[@intFromEnum(token.kind)];
+        if (token.row_start > row) {
+            row = token.row_start;
+            _ = try out_file.write("\n");
+        }
+        switch (token.kind) {
+            KIND.LIT_INTEGER,
+            => {
+                if (token.data_extra == 1) { // negative
+                    _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, -@as(i64, @bitCast(token.data_val_or_ptr)) }));
+                } else {
+                    _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, token.data_val_or_ptr }));
+                }
+            },
+            KIND.LIT_FLOAT => {
+                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, @as(f64, @bitCast(token.data_val_or_ptr)) }));
+            },
+            KIND.LIT_BOOL => {
+                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(token.data_val_or_ptr)))) }));
+            },
+            KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
+                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({s}) ", .{ name, ProgramROM.global.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
+            },
+            KIND.IDENT => {
+                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({s}) ", .{ name, IdentManager.global.ident_names.items[token.data_val_or_ptr] }));
+            },
+            else => {
+                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s} ", .{name}));
+            },
+        }
     }
+    return;
 }

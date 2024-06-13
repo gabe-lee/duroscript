@@ -56,36 +56,36 @@ pub fn write_single(self: *Self, comptime T: type, val: T) void {
 pub fn write_slice(self: *Self, comptime T: type, vals: []T) void {
     assert(self.len & (@alignOf(T) - 1) == 0);
     assert((self.cap - self.len) >= (@sizeOf(T) * vals.len));
-    const dest_ptr: [*]T = @ptrCast(@alignCast(self.ptr));
+    const dest_ptr: [*]T = @ptrCast(@alignCast(self.ptr + self.len));
     @memcpy(dest_ptr, vals);
     self.len += (@sizeOf(T) * vals.len);
 }
 
-pub fn ref_single(self: *Self, comptime T: type, idx: usize) *const T {
-    assert(idx & (@alignOf(T) - 1) == 0);
-    assert(self.len >= idx + @sizeOf(T));
-    const val_ptr: *const T = @alignCast(self.ptr[idx]);
+pub fn ref_single(self: *Self, comptime T: type, offset: usize) *const T {
+    assert(offset & (@alignOf(T) - 1) == 0);
+    assert(self.len >= offset + @sizeOf(T));
+    const val_ptr: *const T = @ptrCast(@alignCast(self.ptr + offset));
     return val_ptr;
 }
 
-pub fn ref_slice(self: *Self, comptime T: type, idx: usize, len: usize) []const T {
-    assert(idx & (@alignOf(T) - 1) == 0);
-    assert(self.len >= idx + (@sizeOf(T) * len));
-    const slice_ptr: [*]const T = @alignCast(self.ptr[idx]);
+pub fn ref_slice(self: *Self, comptime T: type, offset: usize, len: usize) []const T {
+    assert(offset & (@alignOf(T) - 1) == 0);
+    assert(self.len >= offset + (@sizeOf(T) * len));
+    const slice_ptr: [*]const T = @ptrCast(@alignCast(self.ptr + offset));
     return slice_ptr[0..len];
 }
 
-pub fn copy_single(self: *Self, comptime T: type, idx: usize) T {
-    assert(idx & (@alignOf(T) - 1) == 0);
-    assert(self.len >= idx + @sizeOf(T));
-    const val_ptr: *const T = @alignCast(self.ptr[idx]);
+pub fn copy_single(self: *Self, comptime T: type, offset: usize) T {
+    assert(offset & (@alignOf(T) - 1) == 0);
+    assert(self.len >= offset + @sizeOf(T));
+    const val_ptr: *const T = @ptrCast(@alignCast(self.ptr + offset));
     return val_ptr.*;
 }
 
-pub fn copy_slice(self: *Self, comptime T: type, idx: usize, dest: []T) void {
-    assert(idx & (@alignOf(T) - 1) == 0);
-    assert(self.len >= idx + (@sizeOf(T) * dest.len));
-    const slice_ptr: [*]const T = @alignCast(self.ptr[idx]);
+pub fn copy_slice(self: *Self, comptime T: type, offset: usize, dest: []T) void {
+    assert(offset & (@alignOf(T) - 1) == 0);
+    assert(self.len >= offset + (@sizeOf(T) * dest.len));
+    const slice_ptr: [*]const T = @ptrCast(@alignCast(self.ptr + offset));
     @memcpy(dest, slice_ptr[0..dest.len]);
     return;
 }

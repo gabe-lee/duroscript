@@ -51,12 +51,12 @@ pub fn next_token(self: *Self) Token {
         ASC.L_CURLY => return self.finish_token_kind(TOK.L_CURLY, token),
         ASC.R_CURLY => return self.finish_token_kind(TOK.R_CURLY, token),
         ASC.L_SQUARE => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.R_SQUARE => return self.finish_token_kind(TOK.SLICE, token),
                     ASC.PLUS => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.R_SQUARE => return self.finish_token_kind(TOK.LIST, token),
@@ -73,11 +73,11 @@ pub fn next_token(self: *Self) Token {
         ASC.R_SQUARE => return self.finish_token_kind(TOK.R_SQUARE, token),
         ASC.QUESTION => return self.finish_token_kind(TOK.MAYBE_NONE, token),
         ASC.PERIOD => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.PERIOD => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.PERIOD => return self.finish_token_kind(TOK.RANGE_INCLUDE_BOTH, token),
@@ -95,7 +95,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.ACCESS, token);
         },
         ASC.EQUALS => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.EQUALS, token),
@@ -106,12 +106,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.ASSIGN, token);
         },
         ASC.LESS_THAN => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.LESS_THAN_EQUAL, token),
                     ASC.LESS_THAN => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.SHIFT_L_ASSIGN, token),
@@ -126,12 +126,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.LESS_THAN, token);
         },
         ASC.MORE_THAN => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.MORE_THAN_EQUAL, token),
                     ASC.LESS_THAN => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.SHIFT_R_ASSIGN, token),
@@ -146,7 +146,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.MORE_THAN, token);
         },
         ASC.EXCLAIM => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.NOT_EQUAL, token),
@@ -156,7 +156,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.LOGIC_NOT, token);
         },
         ASC.PLUS => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.ADD_ASSIGN, token),
@@ -166,7 +166,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.ADD, token);
         },
         ASC.MINUS => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.SUB_ASSIGN, token),
@@ -177,12 +177,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.SUB, token);
         },
         ASC.ASTERISK => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.MULT_ASSIGN, token),
                     ASC.ASTERISK => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.POWER_ASSIGN, token),
@@ -197,12 +197,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.MULT, token);
         },
         ASC.F_SLASH => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.DIV_ASSIGN, token),
                     ASC.F_SLASH => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.ROOT_ASSIGN, token),
@@ -217,7 +217,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.DIV, token);
         },
         ASC.PERCENT => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.MODULO_ASSIGN, token),
@@ -227,12 +227,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.MODULO, token);
         },
         ASC.AMPER => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.BIT_AND_ASSIGN, token),
                     ASC.AMPER => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.LOGIC_AND_ASSIGN, token),
@@ -247,16 +247,16 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.BIT_AND, token);
         },
         ASC.PIPE => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.BIT_OR_ASSIGN, token),
                     ASC.PERIOD => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.PERIOD => {
-                                    if (!self.source.is_complete()) {
+                                    if (self.source.source.len > self.source.curr.pos) {
                                         const byte_4 = self.source.read_next_ascii(NOTICE.ERROR);
                                         switch (byte_4) {
                                             ASC.PIPE => return self.finish_token_kind(TOK.RANGE_EXCLUDE_BOTH, token),
@@ -271,7 +271,7 @@ pub fn next_token(self: *Self) Token {
                         return self.finish_token_generic_illegal(token);
                     },
                     ASC.PIPE => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.LOGIC_OR_ASSIGN, token),
@@ -286,12 +286,12 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.BIT_OR, token);
         },
         ASC.CARET => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.BIT_XOR_ASSIGN, token),
                     ASC.CARET => {
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const byte_3 = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.LOGIC_XOR_ASSIGN, token),
@@ -326,7 +326,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.IDENT, token);
         },
         ASC.DOLLAR => {
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.DUBL_QUOTE => {
@@ -353,56 +353,48 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
     defer string.deinit(alloc);
     var is_escape = false;
     var has_terminal = false;
-    parseloop: while (!self.source.is_complete()) {
+    parseloop: while (self.source.source.len > self.source.curr.pos) {
         const char = self.source.read_next_utf8_char(NOTICE.ERROR);
         switch (is_escape) {
             true => {
+                is_escape = false;
                 switch (char.code) {
                     ASC.n => {
                         string.append(alloc, ASC.NEWLINE) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.t => {
                         string.append(alloc, ASC.H_TAB) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.r => {
                         string.append(alloc, ASC.CR) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK => {
                         string.append(alloc, char.bytes[0]) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.o => {
                         const utf8 = self.source.read_next_n_bytes_as_octal_escape(NOTICE.ERROR, 'o', 3);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.x => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'x', 2);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.u => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'u', 4);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
-                        is_escape = false;
                     },
                     ASC.U => {
                         const utf8 = self.source.read_next_n_bytes_as_hex_escape(NOTICE.ERROR, 'U', 8);
                         if (utf8.code == UNI.REP_CHAR) kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch unreachable;
-                        is_escape = false;
                     },
                     else => {
                         self.source.add_illegal_string_escape_sequence_notice(NOTICE.ERROR, char.code);
                         kind = TOK.ILLEGAL;
                         string.appendSlice(alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
-                        is_escape = false;
                     },
                 }
             },
@@ -411,7 +403,7 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
                     ASC.NEWLINE => {
                         string.append(alloc, ASC.NEWLINE) catch unreachable;
                         self.source.skip_whitespace_except_newline();
-                        if (!self.source.is_complete()) {
+                        if (self.source.source.len > self.source.curr.pos) {
                             const next_byte = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (next_byte) {
                                 ASC.BACKTICK => {},
@@ -481,14 +473,14 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
         var leading_zeroes: u8 = 0;
         switch (byte_2) {
             ASC.b => {
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
                         self.source.rollback_position();
                         break;
                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
                 }
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
                     switch (byte_x) {
                         ASC._0...ASC._1 => {
@@ -520,14 +512,14 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
                 return self.finish_integer_literal_token(data_value, negative, token);
             },
             ASC.o => {
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
                         self.source.rollback_position();
                         break;
                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
                 }
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
                     switch (byte_x) {
                         ASC._0...ASC._7 => {
@@ -567,14 +559,14 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
                 return self.finish_integer_literal_token(data_value, negative, token);
             },
             ASC.x => {
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
                         self.source.rollback_position();
                         break;
                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
                 }
-                while (!self.source.is_complete()) {
+                while (self.source.source.len > self.source.curr.pos) {
                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
                     switch (byte_x) {
                         ASC._0...ASC._9 => {
@@ -669,7 +661,7 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
             slow_parse_buffer[slow_parse_idx] = ASC.e;
             slow_parse_idx += 1;
             has_exp = true;
-            if (!self.source.is_complete()) {
+            if (self.source.source.len > self.source.curr.pos) {
                 const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (first_exp_byte) {
                     ASC.MINUS => {
@@ -682,7 +674,7 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
         },
         else => {},
     }
-    while (!has_exp and !self.source.is_complete()) {
+    while (!has_exp and self.source.source.len > self.source.curr.pos) {
         const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
         switch (byte_x) {
             ASC._0...ASC._9 => {
@@ -690,7 +682,7 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
                 if (sig_int_found) {
                     if (is_float and byte_x == ASC._0) {
                         var trailing_zeroes: u16 = 1;
-                        while (!self.source.is_complete()) {
+                        while (self.source.source.len > self.source.curr.pos) {
                             const byte_xx = self.source.read_next_ascii(NOTICE.ERROR);
                             switch (byte_xx) {
                                 ASC._0 => {
@@ -752,7 +744,7 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
                 slow_parse_buffer[slow_parse_idx] = ASC.e;
                 slow_parse_idx += 1;
                 has_exp = true;
-                if (!self.source.is_complete()) {
+                if (self.source.source.len > self.source.curr.pos) {
                     const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
                     switch (first_exp_byte) {
                         ASC.MINUS => {
@@ -780,7 +772,7 @@ fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte
     var explicit_exp: i64 = 0;
     var exp_sig_digits: u64 = 0;
     var exp_sig_int_found = false;
-    while (has_exp and !self.source.is_complete()) {
+    while (has_exp and self.source.source.len > self.source.curr.pos) {
         const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
         switch (byte_x) {
             ASC._0...ASC._9 => {

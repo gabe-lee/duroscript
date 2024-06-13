@@ -8,3 +8,4 @@ zig-out/
 /docgen_tmp/
 .scratch
 /scrap
+/test_bodies/*.tokens*
