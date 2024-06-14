@@ -129,20 +129,28 @@ pub fn parse_integer(source: *SourceReader, comptime base: BASE, comptime negati
                 },
             },
         };
-        if (base == BASE.OCT and bit_offset == 1) {
-            if (val & TOP_2_MSB_MASK != 0) {
-                num_too_large = true;
-                break;
-            }
-            val <<= 2;
-            bit_offset = 0;
-        }
         at_least_one_digit = true;
         implicit_power += power_add;
         val |= next_bits << bit_offset;
         source.curr.advance_one_col(1);
         if (bit_offset == 0) break;
-        bit_offset -= BITS_PER_DIGIT;
+        if (base == BASE.OCT and bit_offset == 1) {
+            if (source.source.len > source.curr.pos) {
+                const next_oct = source.peek_next_byte();
+                if (next_oct >= ASC._0 and next_oct <= ASC._7) {
+                    if (val & TOP_2_MSB_MASK != 0) {
+                        num_too_large = true;
+                        break;
+                    }
+                    val <<= 2;
+                    bit_offset = 0;
+                    continue;
+                }
+            }
+            break;
+        } else {
+            bit_offset -= BITS_PER_DIGIT;
+        }
     }
     while (source.source.len > source.curr.pos) {
         const next_byte = source.peek_next_byte();

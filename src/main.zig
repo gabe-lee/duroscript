@@ -126,7 +126,6 @@ test "lexer output" {
             if (produced_reader.curr.pos >= produced_reader.source.len and expected_reader.curr.pos >= expected_reader.source.len) {
                 break;
             }
-            // std.debug.print("LOOP\nP: {d} < {d}\nE: {d} < {d}\n", .{ produced_reader.curr.pos, produced_reader.source.len, expected_reader.curr.pos, expected_reader.source.len }); //DEBUG
             const p_start = produced_reader.curr.pos;
             const e_start = expected_reader.curr.pos;
             const p_start_col = produced_reader.curr.col + 1;
@@ -157,7 +156,6 @@ test "lexer output" {
                     }
                 }
             }
-            // std.debug.print("LOOP\nE: {s}\nP: {s}\n", .{ expected_reader.source[e_start..e_end], produced_reader.source[p_start..p_end] }); //DEBUG
 
             if (case_failed) {
                 lexing_failed = true;
