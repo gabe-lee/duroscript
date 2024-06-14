@@ -17,6 +17,12 @@ pub fn new() Self {
     };
 }
 
+pub fn cleanup(self: *Self) void {
+    self.ident_blocks.deinit(self.alloc);
+    self.ident_names.deinit(self.alloc);
+    return;
+}
+
 pub fn get_ident_index(self: *Self, ident_block: IdentBlock, ident_name: []const u8) u64 {
     for (self.ident_blocks.items, 0..) |known_block, idx| {
         if (IdentBlock.eql(ident_block, known_block)) return idx;

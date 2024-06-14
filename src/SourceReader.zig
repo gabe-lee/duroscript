@@ -108,6 +108,21 @@ pub fn skip_until_byte_match(self: *Self, comptime match_byte: u8) void {
     return;
 }
 
+pub fn skip_alpha_underscore(self: *Self) void {
+    self.rolled_back_to_prev = false;
+    while (self.source.len > self.curr.pos) {
+        const byte = self.source[self.curr.pos];
+        switch (byte) {
+            ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
+                self.curr.pos += 1;
+                self.curr.col += 1;
+            },
+            else => break,
+        }
+    }
+    return;
+}
+
 pub fn skip_whitespace(self: *Self) void {
     self.rolled_back_to_prev = false;
     while (self.source.len > self.curr.pos) {

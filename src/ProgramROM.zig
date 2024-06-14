@@ -31,6 +31,11 @@ pub fn new(init_pages: usize) Self {
     };
 }
 
+pub fn cleanup(self: *Self) void {
+    self.alloc.free(self.ptr[0..self.cap]);
+    return;
+}
+
 pub fn prepare_space_for_write(self: *Self, add_bytes: usize, comptime need_align: usize) void {
     const advance_count = (need_align - (self.len & ALIGN_MASK[need_align])) & ALIGN_MASK[need_align];
     const new_required = self.len + advance_count + add_bytes;

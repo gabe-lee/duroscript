@@ -429,14 +429,17 @@ pub const KIND_NAME: [@typeInfo(KIND).Enum.fields.len][]const u8 = compute: {
     break :compute table;
 };
 
-pub fn dump_token_list(alloc: Allocator, original_file: []const u8, list: *List(Self)) !void {
-    const out_file = try std.fs.cwd().createFile(try std.fmt.allocPrint(alloc, "{s}.tokens.produced", .{original_file}), .{});
-    defer out_file.close();
+pub fn create_token_output_file(alloc: Allocator, working_dir: *const std.fs.Dir, path: []const u8, list: *List(Self)) !std.fs.File {
+    const out_file = try working_dir.createFile(path, std.fs.File.CreateFlags{
+        .read = true,
+        .exclusive = false,
+        .truncate = true,
+    });
     var row: u32 = 0;
     for (list.items) |token| {
         const name = KIND_NAME[@intFromEnum(token.kind)];
-        if (token.row_start > row) {
-            row = token.row_start;
+        while (token.row_start > row) {
+            row += 1;
             _ = try out_file.write("\n");
         }
         switch (token.kind) {
@@ -465,5 +468,6 @@ pub fn dump_token_list(alloc: Allocator, original_file: []const u8, list: *List(
             },
         }
     }
-    return;
+    try out_file.seekTo(0);
+    return out_file;
 }
