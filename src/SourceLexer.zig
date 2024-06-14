@@ -14,6 +14,7 @@ const TemplateString = @import("./TemplateString.zig");
 const SlowParseBuffer = Float.SlowParseBuffer;
 const NoticeManager = @import("./NoticeManager.zig");
 const IdentManager = @import("./IdentManager.zig");
+const ParseInteger = @import("./ParseInteger.zig");
 const NOTICE = NoticeManager.KIND;
 
 const ProgramROM = @import("./ProgramROM.zig");
@@ -29,14 +30,18 @@ pub fn new(source: []u8, source_name: []const u8, source_key: u16) Self {
 }
 
 pub fn next_token(self: *Self) Token {
-    self.source.skip_whitespace();
-    if (self.source.is_complete()) {
+    while (self.source.curr.pos < self.source.source.len) {
+        const start = self.source.curr.pos;
+        if (self.source.source[self.source.curr.pos] == ASC.HASH) {
+            self.source.skip_until_byte_match(ASC.NEWLINE);
+        }
+        self.source.skip_whitespace();
+        const end = self.source.curr.pos;
+        if (start == end) break;
+    }
+    if (self.source.curr.pos >= self.source.source.len) {
         var token = TokenBuilder.new(self.source_key, self.source);
         return self.finish_token_kind(TOK.EOF, &token);
-    }
-    if (self.source.source[self.source.curr.pos] == ASC.HASH) {
-        self.source.skip_until_byte_match(ASC.NEWLINE);
-        self.source.skip_whitespace();
     }
     var token_builder = TokenBuilder.new(self.source_key, self.source);
     var token = &token_builder;
@@ -170,7 +175,7 @@ pub fn next_token(self: *Self) Token {
                 const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.SUB_ASSIGN, token),
-                    ASC._0...ASC._9 => return self.handle_number_literal(token, true, byte_2),
+                    ASC._0...ASC._9 => return self.parse_number_literal(token, true),
                     else => self.source.rollback_position(),
                 }
             }
@@ -306,7 +311,7 @@ pub fn next_token(self: *Self) Token {
             return self.finish_token_kind(TOK.BIT_XOR, token);
         },
         ASC.TILDE => return self.finish_token_kind(TOK.BIT_NOT, token),
-        ASC._0...ASC._9 => return self.handle_number_literal(token, false, byte_1),
+        ASC._0...ASC._9 => return self.parse_number_literal(token, false),
         ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
             self.source.rollback_position();
             const ident_start = self.source.curr.pos;
@@ -343,6 +348,29 @@ pub fn next_token(self: *Self) Token {
         ASC.DUBL_QUOTE => return self.collect_string(token, true),
         else => return self.finish_token_generic_illegal(token),
     }
+}
+
+fn parse_number_literal(self: *Self, token: *TokenBuilder, comptime negative: bool) Token {
+    const peek_next = self.source.peek_next_byte();
+    var num_result: ParseInteger.ParseNumberResult = undefined;
+    switch (peek_next) {
+        ASC.b => {
+            self.source.curr.advance_one_col(1);
+            num_result = ParseInteger.parse_integer(&self.source, ParseInteger.BASE.BIN, negative);
+        },
+        ASC.o => {
+            self.source.curr.advance_one_col(1);
+            num_result = ParseInteger.parse_integer(&self.source, ParseInteger.BASE.OCT, negative);
+        },
+        ASC.x => {
+            self.source.curr.advance_one_col(1);
+            num_result = ParseInteger.parse_integer(&self.source, ParseInteger.BASE.HEX, negative);
+        },
+        else => @panic("parsing decimal numbers not imlemented!"), // HACK just deal with the simple cases first
+    }
+    token.kind = num_result.kind;
+    token.set_data(num_result.raw, 0, @as(u8, @intFromBool(num_result.neg)));
+    return self.finish_token(token);
 }
 
 fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bool) Token {
@@ -446,413 +474,410 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
     return self.finish_token_kind(TOK.LIT_STRING, token);
 }
 
-fn finish_integer_literal_token(self: *Self, val: u64, negative: bool, token: *TokenBuilder) Token {
-    if (negative and val > MAX_NEGATIVE_I64_AS_U64) {
-        // FIXME add number too large to be negative error
-        return self.finish_token_kind(TOK.ILLEGAL, token);
-    }
-    const true_val: u64 = if (negative) @bitCast(-@as(i64, @intCast(val))) else val;
-    token.set_data(true_val, 0, @intFromBool(negative));
-    return self.finish_token_kind(TOK.LIT_INTEGER, token);
-}
+// fn finish_integer_literal_token(self: *Self, val: u64, negative: bool, token: *TokenBuilder) Token {
+//     if (negative and val > MAX_NEGATIVE_I64_AS_U64) {
+//         // FIXME add number too large to be negative error
+//         return self.finish_token_kind(TOK.ILLEGAL, token);
+//     }
+//     const true_val: u64 = if (negative) @bitCast(-@as(i64, @intCast(val))) else val;
+//     token.set_data(true_val, 0, @intFromBool(negative));
+//     return self.finish_token_kind(TOK.LIT_INTEGER, token);
+// }
 
-fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte_1: u8) Token {
-    const BIN_MSB_SHIFT: u32 = 63;
-    const OCT_MSB_SHIFT: u32 = 61;
-    const HEX_MSB_SHIFT: u32 = 60;
-    assert(byte_1 >= ASC._0 or byte_1 <= ASC._9);
-    if (self.source.is_complete()) {
-        const val: u64 = if (negative) @bitCast(-@as(i64, @intCast(byte_1))) else @as(u64, @intCast(byte_1));
-        token.set_data(val, 0, 0);
-        return self.finish_token_kind(TOK.LIT_INTEGER, token);
-    }
-    const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
-    if (byte_1 == ASC._0) {
-        var data_value: u64 = 0;
-        var bit_position: u32 = 0;
-        var leading_zeroes: u8 = 0;
-        switch (byte_2) {
-            ASC.b => {
-                while (self.source.source.len > self.source.curr.pos) {
-                    const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
-                    if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
-                        self.source.rollback_position();
-                        break;
-                    } else if (leading_zero == ASC._0) leading_zeroes += 1;
-                }
-                while (self.source.source.len > self.source.curr.pos) {
-                    const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
-                    switch (byte_x) {
-                        ASC._0...ASC._1 => {
-                            if (bit_position >= 64) {
-                                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                // FIXME as iilegal number overflows 64 bits error
-                                return self.finish_token_kind(TOK.ILLEGAL, token);
-                            }
-                            data_value |= @as(u64, byte_x - ASC._0) << @truncate(BIN_MSB_SHIFT - bit_position);
-                            bit_position += 1;
-                        },
-                        ASC.UNDERSCORE => {},
-                        ASC._2...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.PERIOD => {
-                            self.source.skip_illegal_alphanumeric_string_plus_dot();
-                            // FIXME as illegal alphanum in binary error
-                            return self.finish_token_kind(TOK.ILLEGAL, token);
-                        },
-                        else => {
-                            self.source.rollback_position();
-                            break;
-                        },
-                    }
-                }
-                data_value >>= @truncate(64 - bit_position);
-                if (leading_zeroes == 0 or bit_position == 0) {
-                    // FIXME as illegal number literal no significant bits error
-                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                }
-                return self.finish_integer_literal_token(data_value, negative, token);
-            },
-            ASC.o => {
-                while (self.source.source.len > self.source.curr.pos) {
-                    const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
-                    if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
-                        self.source.rollback_position();
-                        break;
-                    } else if (leading_zero == ASC._0) leading_zeroes += 1;
-                }
-                while (self.source.source.len > self.source.curr.pos) {
-                    const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
-                    switch (byte_x) {
-                        ASC._0...ASC._7 => {
-                            if (bit_position >= 64) {
-                                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                // FIXME as illegal number overflows 64 bits error
-                                return self.finish_token_kind(TOK.ILLEGAL, token);
-                            } else if (bit_position == 63) {
-                                if (data_value & 0xC000000000000000 != 0) {
-                                    self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                    // FIXME as illegal number overflows 64 bits error
-                                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                                }
-                                data_value = (data_value << 2) | @as(u64, byte_x - ASC._0);
-                            } else {
-                                data_value |= @as(u64, byte_x - ASC._0) << @truncate(OCT_MSB_SHIFT - bit_position);
-                                bit_position += 3;
-                            }
-                        },
-                        ASC.UNDERSCORE => {},
-                        ASC._8...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.PERIOD => {
-                            self.source.skip_illegal_alphanumeric_string_plus_dot();
-                            // FIXME as illegal alphanum in octal error
-                            return self.finish_token_kind(TOK.ILLEGAL, token);
-                        },
-                        else => {
-                            self.source.rollback_position();
-                            break;
-                        },
-                    }
-                }
-                data_value >>= @truncate(64 - bit_position);
-                if (leading_zeroes == 0 or bit_position == 0) {
-                    // FIXME as illegal number literal no significant bits error
-                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                }
-                return self.finish_integer_literal_token(data_value, negative, token);
-            },
-            ASC.x => {
-                while (self.source.source.len > self.source.curr.pos) {
-                    const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
-                    if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
-                        self.source.rollback_position();
-                        break;
-                    } else if (leading_zero == ASC._0) leading_zeroes += 1;
-                }
-                while (self.source.source.len > self.source.curr.pos) {
-                    const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
-                    switch (byte_x) {
-                        ASC._0...ASC._9 => {
-                            if (bit_position >= 64) {
-                                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                // FIXME as illegal number overflows 64 bits error
-                                return self.finish_token_kind(TOK.ILLEGAL, token);
-                            }
-                            data_value |= @as(u64, byte_x - ASC._0) << @truncate(HEX_MSB_SHIFT - bit_position);
-                            bit_position += 4;
-                        },
-                        ASC.A...ASC.F => {
-                            if (bit_position >= 64) {
-                                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                // FIXME as illegal number overflows 64 bits error
-                                return self.finish_token_kind(TOK.ILLEGAL, token);
-                            }
-                            data_value |= @as(u64, byte_x - ASC.A) << @truncate(HEX_MSB_SHIFT - bit_position);
-                            bit_position += 4;
-                        },
-                        ASC.a...ASC.f => {
-                            if (bit_position >= 64) {
-                                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                // FIXME as illegal number overflows 64 bits error
-                                return self.finish_token_kind(TOK.ILLEGAL, token);
-                            }
-                            data_value |= @as(u64, byte_x - ASC.a) << @truncate(HEX_MSB_SHIFT - bit_position);
-                            bit_position += 4;
-                        },
-                        ASC.UNDERSCORE => {},
-                        ASC.G...ASC.Z, ASC.g...ASC.z, ASC.PERIOD => {
-                            self.source.skip_illegal_alphanumeric_string_plus_dot();
-                            // FIXME as illegal alphanum in hex error
-                            return self.finish_token_kind(TOK.ILLEGAL, token);
-                        },
-                        else => {
-                            self.source.rollback_position();
-                            break;
-                        },
-                    }
-                }
-                if (leading_zeroes == 0 or bit_position == 0) {
-                    // FIXME as illegal number literal no significant bits error
-                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                }
-                data_value >>= @truncate(64 - bit_position);
-                return self.finish_integer_literal_token(data_value, negative, token);
-            },
-            ASC._0...ASC._9, ASC.PERIOD, ASC.UNDERSCORE, ASC.e, ASC.E => {
-                self.source.rollback_position();
-            },
-            else => {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal alphanum in number error
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            },
-        }
-    }
-    var slow_parse_buffer: SlowParseBuffer = [1]u8{0} ** 26;
-    var slow_parse_idx: usize = 0;
-    var sig_value: u64 = 0;
-    var sig_digits: u64 = 0;
-    var implicit_exp: i64 = 0;
-    var is_float = false;
-    var flt_exp_sub: i16 = 0;
-    var has_exp = false;
-    var neg_exp = false;
-    var sig_int_found = byte_1 != ASC._0;
-    if (sig_int_found) {
-        slow_parse_buffer[slow_parse_idx] = byte_1;
-        slow_parse_idx += 1;
-        sig_value = byte_1;
-        sig_digits += 1;
-    }
-    switch (byte_2) {
-        ASC._0...ASC._9 => {
-            sig_int_found = sig_int_found or (byte_2 != ASC._0);
-            if (sig_int_found) {
-                slow_parse_buffer[slow_parse_idx] = byte_2;
-                slow_parse_idx += 1;
-                sig_value = (sig_value *% 10) + @as(u64, byte_2 - ASC._0);
-                sig_digits += 1;
-            }
-        },
-        ASC.PERIOD => {
-            slow_parse_buffer[slow_parse_idx] = byte_2;
-            slow_parse_idx += 1;
-            is_float = true;
-            flt_exp_sub = 1;
-        },
-        ASC.e, ASC.E => {
-            slow_parse_buffer[slow_parse_idx] = ASC.e;
-            slow_parse_idx += 1;
-            has_exp = true;
-            if (self.source.source.len > self.source.curr.pos) {
-                const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
-                switch (first_exp_byte) {
-                    ASC.MINUS => {
-                        neg_exp = true;
-                    },
-                    ASC.PLUS => {},
-                    else => self.source.rollback_position(),
-                }
-            }
-        },
-        else => {},
-    }
-    while (!has_exp and self.source.source.len > self.source.curr.pos) {
-        const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
-        switch (byte_x) {
-            ASC._0...ASC._9 => {
-                sig_int_found = sig_int_found or (byte_x != ASC._0);
-                if (sig_int_found) {
-                    if (is_float and byte_x == ASC._0) {
-                        var trailing_zeroes: u16 = 1;
-                        while (self.source.source.len > self.source.curr.pos) {
-                            const byte_xx = self.source.read_next_ascii(NOTICE.ERROR);
-                            switch (byte_xx) {
-                                ASC._0 => {
-                                    trailing_zeroes += 1;
-                                },
-                                ASC._1...ASC._9 => {
-                                    sig_value *%= POWER_10_TABLE[trailing_zeroes];
-                                    sig_digits += trailing_zeroes;
-                                    implicit_exp -= trailing_zeroes;
-                                    if (sig_digits > 19 or (sig_digits == 19 and ((byte_x <= ASC._5 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5) or (byte_x >= ASC._6 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9)))) {
-                                        self.source.skip_illegal_alphanumeric_string_plus_dot();
-                                        // FIXME as illegal number overflows 64 bits error
-                                        return self.finish_token_kind(TOK.ILLEGAL, token);
-                                    }
-                                    slow_parse_idx += trailing_zeroes;
-                                    slow_parse_buffer[slow_parse_idx] = byte_xx;
-                                    slow_parse_idx += 1;
-                                    sig_digits += 1;
-                                    implicit_exp -= 1;
-                                    sig_value = (sig_value *% 10) + @as(u64, byte_xx - ASC._0);
-                                    break;
-                                },
-                                else => {
-                                    self.source.rollback_position();
-                                    break;
-                                },
-                            }
-                        }
-                    } else {
-                        if (sig_digits > 19 or (sig_digits == 19 and ((byte_x <= ASC._5 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5) or (byte_x >= ASC._6 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9)))) {
-                            self.source.skip_illegal_alphanumeric_string_plus_dot();
-                            // FIXME as illegal number overflows 64 bits error
-                            return self.finish_token_kind(TOK.ILLEGAL, token);
-                        }
-                        slow_parse_buffer[slow_parse_idx] = byte_x;
-                        slow_parse_idx += 1;
-                        sig_value = (sig_value *% 10) + @as(u64, byte_x - ASC._0);
-                        sig_digits += 1;
-                        implicit_exp -= flt_exp_sub;
-                    }
-                }
-            },
-            ASC.PERIOD => {
-                if (is_float) {
-                    self.source.skip_illegal_alphanumeric_string_plus_dot();
-                    // FIXME as illegal float too many dots error
-                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                }
-                slow_parse_buffer[slow_parse_idx] = byte_x;
-                slow_parse_idx += 1;
-                is_float = true;
-            },
-            ASC.E, ASC.e => {
-                if (has_exp) {
-                    self.source.skip_illegal_alphanumeric_string_plus_dot();
-                    // FIXME as illegal number too many exponents error
-                    return self.finish_token_kind(TOK.ILLEGAL, token);
-                }
-                slow_parse_buffer[slow_parse_idx] = ASC.e;
-                slow_parse_idx += 1;
-                has_exp = true;
-                if (self.source.source.len > self.source.curr.pos) {
-                    const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
-                    switch (first_exp_byte) {
-                        ASC.MINUS => {
-                            neg_exp = true;
-                            slow_parse_buffer[slow_parse_idx] = ASC.MINUS;
-                            slow_parse_idx += 1;
-                        },
-                        ASC.PLUS => {},
-                        else => self.source.rollback_position(),
-                    }
-                }
-            },
-            ASC.UNDERSCORE => {},
-            ASC.A...ASC.D, ASC.F...ASC.Z, ASC.a...ASC.d, ASC.f...ASC.z => {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal alphanum in number error
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            },
-            else => {
-                self.source.rollback_position();
-                break;
-            },
-        }
-    }
-    var explicit_exp: i64 = 0;
-    var exp_sig_digits: u64 = 0;
-    var exp_sig_int_found = false;
-    while (has_exp and self.source.source.len > self.source.curr.pos) {
-        const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
-        switch (byte_x) {
-            ASC._0...ASC._9 => {
-                exp_sig_int_found = exp_sig_int_found or (byte_x != ASC._0);
-                if (exp_sig_int_found) {
-                    if (exp_sig_digits == 4) return {
-                        self.source.skip_illegal_alphanumeric_string_plus_dot();
-                        // FIXME as illegal number too many digits in exponent
-                        return self.finish_token_kind(TOK.ILLEGAL, token);
-                    };
-                    slow_parse_buffer[slow_parse_idx] = byte_x;
-                    slow_parse_idx += 1;
-                    explicit_exp = (explicit_exp *% 10) + @as(i64, byte_x - ASC._0);
-                    exp_sig_digits += 1;
-                }
-            },
-            ASC.PERIOD => {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal float period in exponent
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            },
-            ASC.E, ASC.e => {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal alphanum too many exponents
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            },
-            ASC.UNDERSCORE => {},
-            ASC.A...ASC.D, ASC.F...ASC.Z, ASC.a...ASC.d, ASC.f...ASC.z => {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal alphanum in exponent error
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            },
-            else => {
-                self.source.rollback_position();
-                break;
-            },
-        }
-    }
-    if (!is_float) {
-        const exp_mag = @abs(explicit_exp);
-        if (explicit_exp > 0) {
-            if (explicit_exp > 19 or sig_value > MAX_INT_VALS_FOR_POSITIVE_EXP[exp_mag]) {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal integer overflows 64 bits error
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            }
-            sig_value *= POWER_10_TABLE[exp_mag];
-        } else if (explicit_exp < 0) {
-            if (explicit_exp < 19 or sig_value % POWER_10_TABLE[exp_mag] != 0) {
-                self.source.skip_illegal_alphanumeric_string_plus_dot();
-                // FIXME as illegal integer loss of data
-                return self.finish_token_kind(TOK.ILLEGAL, token);
-            }
-            sig_value /= POWER_10_TABLE[exp_mag];
-        }
-        return self.finish_integer_literal_token(sig_value, negative, token);
-    } else {
-        if (sig_value == 0 or sig_digits == 0) {
-            const value: u64 = @bitCast(F64.ZERO);
-            token.set_data(value, 0, 0);
-            return self.finish_token_kind(TOK.LIT_FLOAT, token);
-        }
-        const final_exp = implicit_exp + explicit_exp;
-        if (sig_digits > F64.MAX_SIG_DIGITS) {
-            // FIXME as illegal float too many sig digits
-            return self.finish_token_kind(TOK.ILLEGAL, token);
-        }
-        if (final_exp > F64.MAX_EXPONENT or (final_exp == F64.MAX_EXPONENT and sig_value > F64.MAX_SIG_DECIMAL_AT_MAX_EXP)) {
-            // FIXME as illegal float too large
-            return self.finish_token_kind(TOK.ILLEGAL, token);
-        }
-        if (final_exp < F64.MIN_EXPONENT or (final_exp == F64.MIN_EXPONENT and sig_value < F64.MIN_SIG_DECIMAL_AT_MIN_EXP)) {
-            // FIXME as illegal float too small
-            return self.finish_token_kind(TOK.ILLEGAL, token);
-        }
-        const value: u64 = @bitCast(Float.parse_float_from_decimal_parts(sig_value, final_exp, negative, slow_parse_buffer, slow_parse_idx));
-        token.set_data(value, 0, 0);
-        return self.finish_token_kind(TOK.LIT_FLOAT, token);
-    }
-}
+// fn handle_number_literal(self: *Self, token: *TokenBuilder, negative: bool, byte_1: u8) Token {
+//     assert(byte_1 >= ASC._0 or byte_1 <= ASC._9);
+//     if (self.source.curr.pos >= self.source.source.len) {
+//         const val: u64 = if (negative) @bitCast(-@as(i64, @intCast(byte_1))) else @as(u64, @intCast(byte_1));
+//         token.set_data(val, 0, 0);
+//         return self.finish_token_kind(TOK.LIT_INTEGER, token);
+//     }
+//     const byte_2 = self.source.read_next_ascii(NOTICE.ERROR);
+//     if (byte_1 == ASC._0) {
+//         var data_value: u64 = 0;
+//         var bit_position: u32 = 0;
+//         var leading_zeroes: u8 = 0;
+//         switch (byte_2) {
+//             ASC.b => {
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
+//                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
+//                         self.source.rollback_position();
+//                         break;
+//                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
+//                 }
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
+//                     switch (byte_x) {
+//                         ASC._0...ASC._1 => {
+//                             if (bit_position >= 64) {
+//                                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                 // FIXME as iilegal number overflows 64 bits error
+//                                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//                             }
+//                             data_value |= @as(u64, byte_x - ASC._0) << @truncate(BIN_MSB_SHIFT - bit_position);
+//                             bit_position += 1;
+//                         },
+//                         ASC.UNDERSCORE => {},
+//                         ASC._2...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.PERIOD => {
+//                             self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                             // FIXME as illegal alphanum in binary error
+//                             return self.finish_token_kind(TOK.ILLEGAL, token);
+//                         },
+//                         else => {
+//                             self.source.rollback_position();
+//                             break;
+//                         },
+//                     }
+//                 }
+//                 data_value >>= @truncate(64 - bit_position);
+//                 if (leading_zeroes == 0 or bit_position == 0) {
+//                     // FIXME as illegal number literal no significant bits error
+//                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                 }
+//                 return self.finish_integer_literal_token(data_value, negative, token);
+//             },
+//             ASC.o => {
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
+//                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
+//                         self.source.rollback_position();
+//                         break;
+//                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
+//                 }
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
+//                     switch (byte_x) {
+//                         ASC._0...ASC._7 => {
+//                             if (bit_position >= 64) {
+//                                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                 // FIXME as illegal number overflows 64 bits error
+//                                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//                             } else if (bit_position == 63) {
+//                                 if (data_value & 0xC000000000000000 != 0) {
+//                                     self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                     // FIXME as illegal number overflows 64 bits error
+//                                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                                 }
+//                                 data_value = (data_value << 2) | @as(u64, byte_x - ASC._0);
+//                             } else {
+//                                 data_value |= @as(u64, byte_x - ASC._0) << @truncate(OCT_MSB_SHIFT - bit_position);
+//                                 bit_position += 3;
+//                             }
+//                         },
+//                         ASC.UNDERSCORE => {},
+//                         ASC._8...ASC._9, ASC.A...ASC.Z, ASC.a...ASC.z, ASC.PERIOD => {
+//                             self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                             // FIXME as illegal alphanum in octal error
+//                             return self.finish_token_kind(TOK.ILLEGAL, token);
+//                         },
+//                         else => {
+//                             self.source.rollback_position();
+//                             break;
+//                         },
+//                     }
+//                 }
+//                 data_value >>= @truncate(64 - bit_position);
+//                 if (leading_zeroes == 0 or bit_position == 0) {
+//                     // FIXME as illegal number literal no significant bits error
+//                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                 }
+//                 return self.finish_integer_literal_token(data_value, negative, token);
+//             },
+//             ASC.x => {
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const leading_zero = self.source.read_next_ascii(NOTICE.ERROR);
+//                     if (leading_zero != ASC._0 or leading_zero != ASC.UNDERSCORE) {
+//                         self.source.rollback_position();
+//                         break;
+//                     } else if (leading_zero == ASC._0) leading_zeroes += 1;
+//                 }
+//                 while (self.source.source.len > self.source.curr.pos) {
+//                     const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
+//                     switch (byte_x) {
+//                         ASC._0...ASC._9 => {
+//                             if (bit_position >= 64) {
+//                                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                 // FIXME as illegal number overflows 64 bits error
+//                                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//                             }
+//                             data_value |= @as(u64, byte_x - ASC._0) << @truncate(HEX_MSB_SHIFT - bit_position);
+//                             bit_position += 4;
+//                         },
+//                         ASC.A...ASC.F => {
+//                             if (bit_position >= 64) {
+//                                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                 // FIXME as illegal number overflows 64 bits error
+//                                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//                             }
+//                             data_value |= @as(u64, byte_x - ASC.A) << @truncate(HEX_MSB_SHIFT - bit_position);
+//                             bit_position += 4;
+//                         },
+//                         ASC.a...ASC.f => {
+//                             if (bit_position >= 64) {
+//                                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                 // FIXME as illegal number overflows 64 bits error
+//                                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//                             }
+//                             data_value |= @as(u64, byte_x - ASC.a) << @truncate(HEX_MSB_SHIFT - bit_position);
+//                             bit_position += 4;
+//                         },
+//                         ASC.UNDERSCORE => {},
+//                         ASC.G...ASC.Z, ASC.g...ASC.z, ASC.PERIOD => {
+//                             self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                             // FIXME as illegal alphanum in hex error
+//                             return self.finish_token_kind(TOK.ILLEGAL, token);
+//                         },
+//                         else => {
+//                             self.source.rollback_position();
+//                             break;
+//                         },
+//                     }
+//                 }
+//                 if (leading_zeroes == 0 or bit_position == 0) {
+//                     // FIXME as illegal number literal no significant bits error
+//                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                 }
+//                 data_value >>= @truncate(64 - bit_position);
+//                 return self.finish_integer_literal_token(data_value, negative, token);
+//             },
+//             ASC._0...ASC._9, ASC.PERIOD, ASC.UNDERSCORE, ASC.e, ASC.E => {
+//                 self.source.rollback_position();
+//             },
+//             else => {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal alphanum in number error
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             },
+//         }
+//     }
+//     var slow_parse_buffer: SlowParseBuffer = [1]u8{0} ** 26;
+//     var slow_parse_idx: usize = 0;
+//     var sig_value: u64 = 0;
+//     var sig_digits: u64 = 0;
+//     var implicit_exp: i64 = 0;
+//     var is_float = false;
+//     var flt_exp_sub: i16 = 0;
+//     var has_exp = false;
+//     var neg_exp = false;
+//     var sig_int_found = byte_1 != ASC._0;
+//     if (sig_int_found) {
+//         slow_parse_buffer[slow_parse_idx] = byte_1;
+//         slow_parse_idx += 1;
+//         sig_value = byte_1;
+//         sig_digits += 1;
+//     }
+//     switch (byte_2) {
+//         ASC._0...ASC._9 => {
+//             sig_int_found = sig_int_found or (byte_2 != ASC._0);
+//             if (sig_int_found) {
+//                 slow_parse_buffer[slow_parse_idx] = byte_2;
+//                 slow_parse_idx += 1;
+//                 sig_value = (sig_value *% 10) + @as(u64, byte_2 - ASC._0);
+//                 sig_digits += 1;
+//             }
+//         },
+//         ASC.PERIOD => {
+//             slow_parse_buffer[slow_parse_idx] = byte_2;
+//             slow_parse_idx += 1;
+//             is_float = true;
+//             flt_exp_sub = 1;
+//         },
+//         ASC.e, ASC.E => {
+//             slow_parse_buffer[slow_parse_idx] = ASC.e;
+//             slow_parse_idx += 1;
+//             has_exp = true;
+//             if (self.source.source.len > self.source.curr.pos) {
+//                 const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
+//                 switch (first_exp_byte) {
+//                     ASC.MINUS => {
+//                         neg_exp = true;
+//                     },
+//                     ASC.PLUS => {},
+//                     else => self.source.rollback_position(),
+//                 }
+//             }
+//         },
+//         else => {},
+//     }
+//     while (!has_exp and self.source.source.len > self.source.curr.pos) {
+//         const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
+//         switch (byte_x) {
+//             ASC._0...ASC._9 => {
+//                 sig_int_found = sig_int_found or (byte_x != ASC._0);
+//                 if (sig_int_found) {
+//                     if (is_float and byte_x == ASC._0) {
+//                         var trailing_zeroes: u16 = 1;
+//                         while (self.source.source.len > self.source.curr.pos) {
+//                             const byte_xx = self.source.read_next_ascii(NOTICE.ERROR);
+//                             switch (byte_xx) {
+//                                 ASC._0 => {
+//                                     trailing_zeroes += 1;
+//                                 },
+//                                 ASC._1...ASC._9 => {
+//                                     sig_value *%= POWER_10_TABLE[trailing_zeroes];
+//                                     sig_digits += trailing_zeroes;
+//                                     implicit_exp -= trailing_zeroes;
+//                                     if (sig_digits > 19 or (sig_digits == 19 and ((byte_x <= ASC._5 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5) or (byte_x >= ASC._6 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9)))) {
+//                                         self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                                         // FIXME as illegal number overflows 64 bits error
+//                                         return self.finish_token_kind(TOK.ILLEGAL, token);
+//                                     }
+//                                     slow_parse_idx += trailing_zeroes;
+//                                     slow_parse_buffer[slow_parse_idx] = byte_xx;
+//                                     slow_parse_idx += 1;
+//                                     sig_digits += 1;
+//                                     implicit_exp -= 1;
+//                                     sig_value = (sig_value *% 10) + @as(u64, byte_xx - ASC._0);
+//                                     break;
+//                                 },
+//                                 else => {
+//                                     self.source.rollback_position();
+//                                     break;
+//                                 },
+//                             }
+//                         }
+//                     } else {
+//                         if (sig_digits > 19 or (sig_digits == 19 and ((byte_x <= ASC._5 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_0_THRU_5) or (byte_x >= ASC._6 and sig_value > LARGEST_19_DIGIT_INTEGER_THAT_CAN_ACCEPT_6_THRU_9)))) {
+//                             self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                             // FIXME as illegal number overflows 64 bits error
+//                             return self.finish_token_kind(TOK.ILLEGAL, token);
+//                         }
+//                         slow_parse_buffer[slow_parse_idx] = byte_x;
+//                         slow_parse_idx += 1;
+//                         sig_value = (sig_value *% 10) + @as(u64, byte_x - ASC._0);
+//                         sig_digits += 1;
+//                         implicit_exp -= flt_exp_sub;
+//                     }
+//                 }
+//             },
+//             ASC.PERIOD => {
+//                 if (is_float) {
+//                     self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                     // FIXME as illegal float too many dots error
+//                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                 }
+//                 slow_parse_buffer[slow_parse_idx] = byte_x;
+//                 slow_parse_idx += 1;
+//                 is_float = true;
+//             },
+//             ASC.E, ASC.e => {
+//                 if (has_exp) {
+//                     self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                     // FIXME as illegal number too many exponents error
+//                     return self.finish_token_kind(TOK.ILLEGAL, token);
+//                 }
+//                 slow_parse_buffer[slow_parse_idx] = ASC.e;
+//                 slow_parse_idx += 1;
+//                 has_exp = true;
+//                 if (self.source.source.len > self.source.curr.pos) {
+//                     const first_exp_byte = self.source.read_next_ascii(NOTICE.ERROR);
+//                     switch (first_exp_byte) {
+//                         ASC.MINUS => {
+//                             neg_exp = true;
+//                             slow_parse_buffer[slow_parse_idx] = ASC.MINUS;
+//                             slow_parse_idx += 1;
+//                         },
+//                         ASC.PLUS => {},
+//                         else => self.source.rollback_position(),
+//                     }
+//                 }
+//             },
+//             ASC.UNDERSCORE => {},
+//             ASC.A...ASC.D, ASC.F...ASC.Z, ASC.a...ASC.d, ASC.f...ASC.z => {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal alphanum in number error
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             },
+//             else => {
+//                 self.source.rollback_position();
+//                 break;
+//             },
+//         }
+//     }
+//     var explicit_exp: i64 = 0;
+//     var exp_sig_digits: u64 = 0;
+//     var exp_sig_int_found = false;
+//     while (has_exp and self.source.source.len > self.source.curr.pos) {
+//         const byte_x = self.source.read_next_ascii(NOTICE.ERROR);
+//         switch (byte_x) {
+//             ASC._0...ASC._9 => {
+//                 exp_sig_int_found = exp_sig_int_found or (byte_x != ASC._0);
+//                 if (exp_sig_int_found) {
+//                     if (exp_sig_digits == 4) return {
+//                         self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                         // FIXME as illegal number too many digits in exponent
+//                         return self.finish_token_kind(TOK.ILLEGAL, token);
+//                     };
+//                     slow_parse_buffer[slow_parse_idx] = byte_x;
+//                     slow_parse_idx += 1;
+//                     explicit_exp = (explicit_exp *% 10) + @as(i64, byte_x - ASC._0);
+//                     exp_sig_digits += 1;
+//                 }
+//             },
+//             ASC.PERIOD => {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal float period in exponent
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             },
+//             ASC.E, ASC.e => {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal alphanum too many exponents
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             },
+//             ASC.UNDERSCORE => {},
+//             ASC.A...ASC.D, ASC.F...ASC.Z, ASC.a...ASC.d, ASC.f...ASC.z => {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal alphanum in exponent error
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             },
+//             else => {
+//                 self.source.rollback_position();
+//                 break;
+//             },
+//         }
+//     }
+//     if (!is_float) {
+//         const exp_mag = @abs(explicit_exp);
+//         if (explicit_exp > 0) {
+//             if (explicit_exp > 19 or sig_value > MAX_INT_VALS_FOR_POSITIVE_EXP[exp_mag]) {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal integer overflows 64 bits error
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             }
+//             sig_value *= POWER_10_TABLE[exp_mag];
+//         } else if (explicit_exp < 0) {
+//             if (explicit_exp < 19 or sig_value % POWER_10_TABLE[exp_mag] != 0) {
+//                 self.source.skip_illegal_alphanumeric_string_plus_dot();
+//                 // FIXME as illegal integer loss of data
+//                 return self.finish_token_kind(TOK.ILLEGAL, token);
+//             }
+//             sig_value /= POWER_10_TABLE[exp_mag];
+//         }
+//         return self.finish_integer_literal_token(sig_value, negative, token);
+//     } else {
+//         if (sig_value == 0 or sig_digits == 0) {
+//             const value: u64 = @bitCast(F64.ZERO);
+//             token.set_data(value, 0, 0);
+//             return self.finish_token_kind(TOK.LIT_FLOAT, token);
+//         }
+//         const final_exp = implicit_exp + explicit_exp;
+//         if (sig_digits > F64.MAX_SIG_DIGITS) {
+//             // FIXME as illegal float too many sig digits
+//             return self.finish_token_kind(TOK.ILLEGAL, token);
+//         }
+//         if (final_exp > F64.MAX_EXPONENT or (final_exp == F64.MAX_EXPONENT and sig_value > F64.MAX_SIG_DECIMAL_AT_MAX_EXP)) {
+//             // FIXME as illegal float too large
+//             return self.finish_token_kind(TOK.ILLEGAL, token);
+//         }
+//         if (final_exp < F64.MIN_EXPONENT or (final_exp == F64.MIN_EXPONENT and sig_value < F64.MIN_SIG_DECIMAL_AT_MIN_EXP)) {
+//             // FIXME as illegal float too small
+//             return self.finish_token_kind(TOK.ILLEGAL, token);
+//         }
+//         const value: u64 = @bitCast(Float.parse_float_from_decimal_parts(sig_value, final_exp, negative, slow_parse_buffer, slow_parse_idx));
+//         token.set_data(value, 0, 0);
+//         return self.finish_token_kind(TOK.LIT_FLOAT, token);
+//     }
+// }
 
 inline fn finish_token(self: *Self, token: *TokenBuilder) Token {
     return Token{

@@ -30,16 +30,14 @@ pub fn main() !void {
         const file_size: u64 = (try file.stat()).size;
         _ = try source_buffer.resize(alloc, file_size);
         _ = try file.readAll(source_buffer.items);
-
         var source_lexer = SourceLexer.new(source_buffer.items, arg, s_key);
         var cont = true;
-
         while (cont) {
             const token = source_lexer.next_token();
             if (token.kind == TOK.EOF) cont = false;
             try token_list.append(alloc, token);
         }
-        try Token.dump_token_list(alloc, arg, &token_list); //DEBUG
+        // try Token.dump_token_list(alloc, arg, &token_list); //DEBUG
         for (NoticeManager.Notices.error_list.items) |err| {
             std.log.err("\x1b[31m{s}\x1b[0m", .{err.string()});
         }

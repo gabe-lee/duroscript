@@ -109,19 +109,18 @@ pub fn skip_until_byte_match(self: *Self, comptime match_byte: u8) void {
 }
 
 pub fn skip_whitespace(self: *Self) void {
+    self.rolled_back_to_prev = false;
     while (self.source.len > self.curr.pos) {
         const byte = self.source[self.curr.pos];
         switch (byte) {
             ASC.SPACE, ASC.H_TAB, ASC.CR => {
                 self.curr.pos += 1;
                 self.curr.col += 1;
-                self.rolled_back_to_prev = false;
             },
             ASC.NEWLINE => {
                 self.curr.pos += 1;
                 self.curr.col = 0;
                 self.curr.row += 1;
-                self.rolled_back_to_prev = false;
             },
             else => break,
         }
@@ -236,6 +235,11 @@ pub fn read_next_byte(self: *Self) u8 {
     }
     self.next_utf8 = UTF8_Read_Result.new(val, [4]u8{ val, 0, 0, 0 }, 1);
     return val;
+}
+
+pub inline fn peek_next_byte(self: *Self) u8 {
+    assert(self.source.len > self.curr.pos);
+    return self.source[self.curr.pos];
 }
 
 pub fn read_next_ascii(self: *Self, comptime notice_kind: NOTICE) u8 {

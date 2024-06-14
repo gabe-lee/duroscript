@@ -1,6 +1,7 @@
 zig-cache/
 /.zig-cache
 zig-out/
+/.zig-out
 /release/
 /debug/
 /build/
@@ -8,4 +9,4 @@ zig-out/
 /docgen_tmp/
 .scratch
 /scrap
-/test_bodies/*.tokens*
+/test_sources/lexing/*/tokens.produced*
