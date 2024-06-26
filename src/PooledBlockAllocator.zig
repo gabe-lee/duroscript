@@ -166,10 +166,6 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
         const T_IDX: type = config.index_type;
         const MAX_TOTAL_ALLOC_BYTES = (1 << @typeInfo(T_IDX).Int.bits) * BLOCK_SIZE;
         const NO_IDX = math.maxInt(T_IDX);
-        const BLOCKS_NEEDED_FOR_1_MEMSPAN = bytes_to_blocks(@sizeOf(MemSpan));
-        const BLOCKS_NEEDED_FOR_2_MEMSPANS = bytes_to_blocks(@sizeOf(MemSpan) * 2);
-        const BLOCKS_NEEDED_FOR_3_MEMSPANS = bytes_to_blocks(@sizeOf(MemSpan) * 3);
-        const BLOCKS_NEEDED_FOR_4_MEMSPANS = bytes_to_blocks(@sizeOf(MemSpan) * 4);
 
         const MemSpanLogical = struct {
             mem_ptr: [*]u8,
@@ -179,7 +175,8 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
         /// A span of contiguous MemBlocks that all point to contiguous real memory and are all being used for the same purpose
         const MemSpan = struct {
             const LOG2_ALIGN = @as(u8, std.math.log2_int(usize, @alignOf(MemSpan)));
-            // const THREE_MEMSPAN_SIZE = @sizeOf(MemSpan) * 3;
+            const SIZE = @sizeOf(MemSpan);
+            const SIZE_8 = @sizeOf(MemSpan) * 8;
 
             mem_ptr: [*]u8,
             block_len: T_IDX,
@@ -270,6 +267,17 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             }
         }
 
+        inline fn should_user_assert() bool {
+            return switch (SAFETY_PANIC) {
+                .NEVER => false,
+                .DUBUG => if (builtin.mode == .Debug) true else false,
+                .RELEASE_SAFE => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) true else false,
+                .RELEASE_SMALL => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) true else false,
+                .RELEASE_FAST => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast) true else false,
+                .ALWAYS => true,
+            };
+        }
+
         inline fn align_bytes_to_blocks(bytes: usize) usize {
             return std.mem.alignForward(usize, bytes, BLOCK_SIZE);
         }
@@ -292,6 +300,12 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
 
         inline fn backing_blocks_to_bytes(backing_blocks: T_IDX) usize {
             return @as(usize, @intCast(backing_blocks)) << LOG2_OF_BACKING_SIZE;
+        }
+
+        inline fn align_blocks_to_backing_blocks(blocks: T_IDX) T_IDX {
+            if (BACKING_SIZE == BLOCK_SIZE) {
+                return blocks;
+            } else return std.mem.alignForward(T_IDX, blocks, BLOCK_BACKING_RATIO);
         }
 
         inline fn blocks_to_backing_blocks(blocks: T_IDX) T_IDX {
@@ -320,7 +334,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             };
             //FIXME fix this
             const list_ptr: [*]u8 = Self.raw_alloc(&self, BLOCK_SIZE, BLOCK_SIZE, 0) orelse unreachable;
-            self.pool_capacity = BLOCK_SIZE / @sizeOf(MemBlock);
+            // self.pool_capacity = BLOCK_SIZE / @sizeOf(MemBlock);
             self.pool.items.len = 0;
             self.pool.items.ptr = @ptrCast(@alignCast(list_ptr));
         }
@@ -359,6 +373,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span_idx].state == .ASSIGNED_USED, DEBUG_ATTEMPT_TO_FREE_NON_USED_SPAN);
             // Remove span from used list and add it to free list with free state
+            self.free_mem_blocks += self.span_list[span_idx].block_len;
             self.remove_span_from_its_linked_list(span_idx, .ASSIGNED_USED);
             self.add_span_to_begining_of_linked_list(span_idx, .ASSIGNED_FREE);
             // If next logical span exists and is also in free state, remove it from the free linked-list, combine its length with current span,
@@ -387,7 +402,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             // and release them to backing allocator
         }
 
-        fn claim_unassigned_span(self: *Self) AllocError!T_IDX {
+        fn claim_unassigned_span(self: *Self) ?T_IDX {
             // Use existing unassigned span if possible
             if (self.first_unassigned_span != NO_IDX) {
                 debug_assert(self.first_unassigned_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
@@ -404,12 +419,13 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             }
             // If span_pool is not at end of logical allocation and has a free span after it that can hold the extra needed blocks,
             // extend span_pool.block_len, add a new unassigned span, and return it
+            const old_inner_bytes = @as(usize, self.span_list_cap) * @sizeOf(MemSpan);
             if (self.span_list[self.span_list_idx].next_logical != NO_IDX) {
                 const next_logical = self.span_list[self.span_list_idx].next_logical;
                 debug_assert(next_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
                 if (self.span_list[next_logical].state == .ASSIGNED_FREE) {
                     debug_assert(self.span_list[next_logical].block_len != 0, DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS);
-                    if (self.span_list[next_logical].block_len == BLOCKS_NEEDED_FOR_1_MEMSPAN) {
+                    if (self.span_list[next_logical].block_len == 1) {
                         self.span_list[self.span_list_idx].next_logical = self.span_list[next_logical].next_logical;
                         self.span_list[self.span_list_idx].block_len += self.span_list[next_logical].block_len;
                         self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
@@ -417,13 +433,13 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                         self.span_list[next_logical].state == .UNASSIGNED;
                         return next_logical;
                     } else {
-                        self.span_list[self.span_list_idx].block_len += BLOCKS_NEEDED_FOR_1_MEMSPAN;
+                        self.span_list[self.span_list_idx].block_len += 1;
                         self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
                         self.span_list[self.span_list_len] = MemSpan.new_unassigned();
                         const claimed_idx = self.span_list_len;
                         self.span_list_len += 1;
-                        self.span_list[next_logical].block_len -= BLOCKS_NEEDED_FOR_1_MEMSPAN;
-                        self.span_list[next_logical].mem_ptr += (@as(usize, BLOCKS_NEEDED_FOR_1_MEMSPAN) << LOG2_OF_BLOCK_SIZE);
+                        self.span_list[next_logical].block_len -= 1;
+                        self.span_list[next_logical].mem_ptr += (@as(usize, 1) << LOG2_OF_BLOCK_SIZE);
                         return claimed_idx;
                     }
                 }
@@ -432,33 +448,43 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                 // extend span_pool.block_len, add a new unassigned span, and return it
                 const entire_logical_span = self.collect_entire_logical_span_from_last(self.span_list_idx);
                 const old_total_bytes = blocks_to_bytes(entire_logical_span.block_len);
-                // FIXME must be + BLOCKS_NEEDED_FOR_2_MEMSPANS???? Or calculate old_bytes + 2 MemSpan size???
-                const new_total_bytes = blocks_to_bytes(entire_logical_span.block_len + BLOCKS_NEEDED_FOR_1_MEMSPAN);
-                // FIXME round new_total_bytes up to BACKING_BLOCK_SIZE, resize to THAT amounts, then split the returned extension into blocks
-                if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], new_total_bytes)) {
-                    self.span_list[self.span_list_idx].block_len += BLOCKS_NEEDED_FOR_1_MEMSPAN;
+                const new_inner_bytes = old_inner_bytes + MemSpan.SIZE_8;
+                const delta_grow_list_bytes = old_total_bytes - new_inner_bytes;
+                const delta_grow_backing_bytes = align_bytes_to_backing_blocks(delta_grow_list_bytes);
+                if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], old_total_bytes + delta_grow_backing_bytes)) {
+                    const delta_grow_list_blocks = bytes_to_blocks(delta_grow_list_bytes);
+                    const delta_grow_total_blocks = bytes_to_blocks(delta_grow_backing_bytes);
+                    self.span_list[self.span_list_idx].block_len += delta_grow_list_blocks;
                     self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
-                    self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+                    if (delta_grow_total_blocks > delta_grow_list_blocks) {
+                        const extra_free = delta_grow_total_blocks - delta_grow_list_blocks;
+                        const new_ptr = self.span_list[self.span_list_idx].mem_ptr + (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE);
+                        self.span_list[self.span_list_len] = MemSpan.new_free(new_ptr, extra_free);
+                        self.span_list[self.span_list_len].prev_logical = self.span_list_idx;
+                        self.span_list[self.span_list_idx].next_logical = self.span_list_len;
+                        self.add_span_to_begining_of_linked_list(self.span_list_len, .ASSIGNED_FREE);
+                        self.span_list_len += 1;
+                    }
                     const claimed_idx = self.span_list_len;
                     self.span_list_len += 1;
+                    self.span_list[self.claimed_idx] = MemSpan.new_unassigned();
+                    debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
                     return claimed_idx;
                 }
             }
-            //FIXME review this logic for correctness
             // Reallocate span_list for additional capacity THEN add new unassigned span
-            const old_bytes = @as(usize, self.span_list_cap) * @sizeOf(MemSpan);
-            const new_bytes_needed = old_bytes + MemSpan.THREE_MEMSPAN_SIZE;
-            const new_blocks_needed = bytes_to_blocks(new_bytes_needed);
+            const new_inner_bytes = old_inner_bytes + MemSpan.SIZE_8;
+            const new_blocks_needed = bytes_to_blocks(new_inner_bytes);
             const new_cap = blocks_to_bytes(new_blocks_needed) / @sizeOf(MemSpan);
             const new_allocation_backing = blocks_to_backing_blocks(new_blocks_needed);
             const new_allocation_blocks = backing_blocks_to_blocks(new_allocation_backing);
             const new_allocation_bytes = backing_blocks_to_bytes(new_allocation_backing);
             const new_alloc_ptr = self.backing_alloc.rawAlloc(new_allocation_bytes, MemSpan.LOG2_ALIGN, 0) orelse switch (ALLOC_ERROR) {
-                .RETURNS => return AllocError.OutOfMemory,
+                .RETURNS => return null,
                 .PANICS => @panic("PooledBlockAllocator's backing allocator failed to allocate additional memory"),
                 .UNREACHABLE => unreachable,
             };
-            const old_mem_slice = self.span_list[self.span_list_idx].mem_ptr[0..old_bytes];
+            const old_mem_slice = self.span_list[self.span_list_idx].mem_ptr[0..old_inner_bytes];
             @memcpy(new_alloc_ptr, old_mem_slice);
             self.clear_mem_if_needed(old_mem_slice);
             self.span_list = @ptrCast(@alignCast(new_alloc_ptr));
@@ -492,7 +518,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             var prev_logical = self.span_list[last_span_idx].prev_logical;
             while (prev_logical != NO_IDX) {
                 debug_assert(prev_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
-                debug_assert(self.span_list[prev_logical].mem_ptr != first_ptr - (@as(usize, self.span_list[prev_logical].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
+                debug_assert(self.span_list[prev_logical].mem_ptr == first_ptr - (@as(usize, self.span_list[prev_logical].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
                 total_blocks += self.span_list[prev_logical].block_len;
                 first_ptr = self.span_list[prev_logical].mem_ptr;
                 prev_logical = self.span_list[prev_logical].prev_logical;
@@ -549,6 +575,47 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             }
         }
 
+        fn assign_span_to_allocation(self: *Self, span: T_IDX, ptr: [*]u8, blocks: T_IDX) void {
+            debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            self.span_list[span].block_len = blocks;
+            self.span_list[span].mem_ptr = ptr;
+            self.span_list[span].next_logical = NO_IDX;
+            self.span_list[span].prev_logical = NO_IDX;
+        }
+
+        fn assign_span_to_next_logical(self: *Self, first_span: T_IDX, next_span: T_IDX, next_size: T_IDX) void {
+            debug_assert(first_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            debug_assert(next_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            self.span_list[next_span].block_len = next_size;
+            self.span_list[next_span].mem_ptr = self.span_list[first_span].mem_ptr + (@as(usize, self.span_list[first_span].block_len) << LOG2_OF_BLOCK_SIZE);
+            self.span_list[next_span].next_logical = self.span_list[first_span].next_logical;
+            self.span_list[next_span].prev_logical = first_span;
+            self.span_list[first_span].next_logical = next_span;
+            if (self.span_list[next_span].next_logical != NO_IDX) {
+                const next_next_span = self.span_list[next_span].next_logical;
+                debug_assert(next_next_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                debug_assert(self.span_list[next_next_span].mem_ptr == self.span_list[next_span].mem_ptr + (@as(usize, self.span_list[next_span].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
+                self.span_list[next_next_span].prev_logical = next_span;
+            }
+        }
+
+        /// Locates the memory span that contains the base pointer of the slice. Assumes slice WAS allocated from this allocator
+        /// AND is in the used span list AND has the same block-length as originally supplied, any other condition is considered
+        /// a non-recoverable error (panic/unreachable)
+        fn find_used_span_from_ptr_check_size(self: *Self, ptr: [*]u8, blocks: T_IDX) T_IDX {
+            var curr_used_span = self.first_used_span;
+            debug_assert(curr_used_span == NO_IDX or curr_used_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            while (curr_used_span != NO_IDX) {
+                debug_assert(curr_used_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                if (self.span_list[curr_used_span].mem_ptr == ptr) {
+                    user_assert(self.span_list[curr_used_span].block_len == blocks, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
+                    return curr_used_span;
+                }
+                curr_used_span = self.span_list[curr_used_span].next_same_state_ll;
+            }
+            user_assert(false, USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR);
+        }
+
         /// Traverses free memory spans and locates a span that can hold the needed blocks. Splits over-large spans if needed,
         /// and grows spans in-place from backing allocator if possible and no existing free span was found. Returns
         /// `NO_IDX` if neither option worked
@@ -564,6 +631,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                     }
                     self.remove_span_from_its_linked_list(curr_free_span_idx, .ASSIGNED_FREE);
                     self.add_span_to_begining_of_linked_list(curr_free_span_idx, .ASSIGNED_USED);
+                    self.free_mem_blocks -= self.span_list[curr_free_span_idx].block_len;
                     return curr_free_span_idx;
                 }
                 curr_free_span_idx = self.span_list[curr_free_span_idx].next_same_state_ll;
@@ -572,89 +640,171 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             return NO_IDX;
         }
 
-        /// Locates the memory span that contains the base pointer of the slice. Assumes slice WAS allocated from this allocator
-        /// AND is in the used span list AND has the same block-length as originally supplied, any other condition is considered
-        /// a non-recoverable error (panic/unreachable)
-        fn find_used_span_from_slice(self: *Self, slice: []u8) T_IDX {
-            debug_assert(slice.len > 0, DEBUG_ATTEMPT_TO_FIND_ZERO_BYTES);
-            debug_assert(self.first_used_span == NO_IDX or self.first_used_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
-            var curr_used_span_idx = self.first_used_span;
-            while (curr_used_span_idx != NO_IDX) {
-                debug_assert(curr_used_span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
-                if (self.span_list[curr_used_span_idx].mem_ptr == slice.ptr) {
-                    const check_block_len = bytes_to_blocks(slice.len);
-                    user_assert(self.span_list[curr_used_span_idx].block_len == check_block_len, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
-                    return curr_used_span_idx;
+        fn shrink_used_span(self: *Self, span_idx: T_IDX, new_size: T_IDX) void {
+            debug_assert(new_size > 0, DEBUG_SHRINK_USED_TO_ZERO_MEANS_FREE);
+            debug_assert(self.span_list[span_idx].block_len > new_size, DEBUG_SHRINK_ACTUALLY_SAME_OR_GROW);
+            debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            const delta_blocks = self.span_list[span_idx].block_len - new_size;
+            self.span_list[span_idx].block_len -= delta_blocks;
+            if (self.span_list[span_idx].next_logical != NO_IDX) {
+                const next_logical = self.span_list[span_idx].next_logical;
+                debug_assert(next_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                debug_assert(self.span_list[next_logical].mem_ptr == self.span_list[span_idx].mem_ptr + (@as(usize, self.span_list[span_idx].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
+                if (self.span_list[next_logical].state == .ASSIGNED_FREE) {
+                    self.span_list[next_logical].block_len += delta_blocks;
+                    self.free_mem_blocks += delta_blocks;
+                    self.span_list[next_logical].mem_ptr -= (@as(usize, delta_blocks) << LOG2_OF_BLOCK_SIZE);
+                    return;
                 }
-                curr_used_span_idx = self.span_list[curr_used_span_idx].next_same_state_ll;
             }
-            user_assert(false, USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR);
+            const new_span = self.claim_unassigned_span();
+            self.assign_span_to_next_logical(span_idx, new_span, delta_blocks);
+            self.free_mem_blocks += delta_blocks;
+            return;
+        }
+
+        fn try_grow_used_in_place_this_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
+            debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            debug_assert(self.span_list[span].state == .ASSIGNED_USED, DEBUG_GROW_FREE_SPAN_IN_HOUSE);
+            const next = self.span_list[span].next_logical;
+            if (next != NO_IDX) {
+                debug_assert(next < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                if (self.span_list[next].state == .ASSIGNED_FREE) {
+                    debug_assert(self.span_list[next].block_len != 0, DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS);
+                    if (self.span_list[next].block_len == grow_delta) {
+                        self.span_list[span].next_logical = self.span_list[next].next_logical;
+                        self.span_list[span].block_len += self.span_list[next].block_len;
+                        self.remove_span_from_its_linked_list(next, .ASSIGNED_FREE);
+                        self.add_span_to_begining_of_linked_list(next, .UNASSIGNED);
+                        self.free_mem_blocks -= grow_delta;
+                        return true;
+                    }
+                    if (self.span_list[next].block_len > grow_delta) {
+                        self.span_list[span].block_len += grow_delta;
+                        self.span_list[next].block_len -= grow_delta;
+                        self.free_mem_blocks -= grow_delta;
+                        self.span_list[next].mem_ptr += (@as(usize, grow_delta) << LOG2_OF_BLOCK_SIZE);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        fn try_grow_free_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
+            debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            const next = self.span_list[span].next_logical;
+            if (next == NO_IDX) {
+                const entire_logical_span = self.collect_entire_logical_span_from_last(span);
+                const old_total_bytes = blocks_to_bytes(entire_logical_span.block_len);
+                const grow_delta_backing = align_blocks_to_backing_blocks(grow_delta);
+                const grow_delta_backing_bytes = blocks_to_bytes(grow_delta_backing);
+                if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], old_total_bytes + grow_delta_backing_bytes)) {
+                    self.span_list[span].block_len += grow_delta_backing;
+                    self.free_mem_blocks += grow_delta_backing;
+                    self.total_mem_blocks += grow_delta_backing;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        fn try_grow_used_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
+            debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            const next = self.span_list[span].next_logical;
+            if (next == NO_IDX) {
+                const entire_logical_span = self.collect_entire_logical_span_from_last(span);
+                const old_total_bytes = blocks_to_bytes(entire_logical_span.block_len);
+                const grow_delta_backing = align_blocks_to_backing_blocks(grow_delta);
+                const grow_delta_backing_bytes = blocks_to_bytes(grow_delta_backing);
+                if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], old_total_bytes + grow_delta_backing_bytes)) {
+                    self.total_mem_blocks += grow_delta_backing;
+                    self.span_list[span].block_len += grow_delta;
+                    if (grow_delta_backing > grow_delta) {
+                        const new_span = self.claim_unassigned_span();
+                        const extra_free_blocks = grow_delta_backing - grow_delta;
+                        self.assign_span_to_next_logical(span, new_span, extra_free_blocks);
+                        self.add_span_to_begining_of_linked_list(new_span, .ASSIGNED_FREE);
+                        self.free_mem_blocks += extra_free_blocks;
+                    }
+                    return true;
+                }
+            }
+            return false;
         }
 
         fn raw_alloc(self_opaque: *anyopaque, bytes: usize, log2_of_align: u8, ret_addr: usize) ?[*]u8 {
             _ = ret_addr;
-            const real_align = 1 << log2_of_align;
-            if (bytes == 0) return @ptrFromInt(std.mem.alignBackward(usize, std.math.maxInt(usize), real_align));
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            // Try to find free memory span
-            const free_span = self.try_find_free_span_with_align(bytes);
-            if (free_span.found) {
-                self.mark_mem_blocks(free_span, .USED);
-                return free_span.mem_ptr;
-            }
-            //CHECKPOINT fix this, maybe also extract functionality from resize_pool()
-            //FIXME
-            if (self.first_free_span != NO_IDX) {
-                var curr_free_mem_block: *MemBlock = &self.pool.items[self.first_free_span];
-                var prev_next_free_idx_ref: *usize = &self.first_free_span;
-                while (true) {
-                    if (curr_free_mem_block.slice.len >= bytes) {
-                        prev_next_free_idx_ref.* = curr_free_mem_block.next_same_state;
-                        curr_free_mem_block.next_same_state = NO_IDX;
-                        return curr_free_mem_block.slice.ptr;
-                    }
-                    if (curr_free_mem_block.next_same_state == NO_IDX) break;
-                    prev_next_free_idx_ref = &curr_free_mem_block.next_same_state;
-                    curr_free_mem_block = &self.pool.items[curr_free_mem_block.next_same_state];
-                }
-            }
-            if (self.pool_capacity - self.pool.items.len < BLOCKS_PER_PAGE) {}
-            const paged_bytes = std.mem.alignForward(usize, bytes, PAGE_SIZE);
-            const page_ptr = self.ba.rawAlloc(paged_bytes, PAGE_SIZE, 0) orelse return null;
-            const new_chunks_array: PAGE_CHUNK_PTR_ARRAY = undefined;
-            for (0..BLOCKS_PER_PAGE) |i| {}
-            //TODO Optimize for platforms with larger page sizes by chopping the returned page into separate
-            // MemBlock chunks and appending them all as new free pointers
-            const new_slice = page_ptr[0..paged_bytes];
-            self.pool.append(page_allocator, MemBlock{
-                .slice = new_slice,
-                .is_free = false,
-            }) catch return null;
-            return page_ptr;
+            const blocks = bytes_to_blocks(bytes);
+            user_assert(bytes > 0, USER_ERROR_REQUESTED_ALLOCATE_ZERO_BYTES);
+            user_assert(self.total_mem_blocks + blocks <= std.math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
+            user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
+            const existing_free_span = self.try_claim_free_span(blocks);
+            if (existing_free_span != NO_IDX) return self.span_list[existing_free_span].mem_ptr;
+            const new_alloc_span_idx = self.claim_unassigned_span() orelse switch (ALLOC_ERROR) {
+                .RETURNS => return null,
+                .PANICS => @panic("PooledBlockAllocator's backing allocator failed to allocate additional memory"),
+                .UNREACHABLE => unreachable,
+            };
+            const backing_blocks = blocks_to_backing_blocks(blocks);
+            const backing_bytes = backing_blocks_to_bytes(backing_blocks);
+            user_assert(self.total_mem_blocks + backing_blocks <= std.math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
+            const new_alloc_ptr = self.backing_alloc.rawAlloc(backing_bytes, LOG2_OF_BLOCK_SIZE, 0) orelse switch (ALLOC_ERROR) {
+                .RETURNS => {
+                    self.add_span_to_begining_of_linked_list(new_alloc_span_idx, .UNASSIGNED);
+                    return null;
+                },
+                .PANICS => @panic("PooledBlockAllocator's backing allocator failed to allocate additional memory"),
+                .UNREACHABLE => unreachable,
+            };
+            self.total_mem_blocks += backing_blocks;
+            self.assign_span_to_allocation(new_alloc_span_idx, new_alloc_ptr, backing_blocks);
+            self.add_span_to_begining_of_linked_list(new_alloc_span_idx, .ASSIGNED_FREE);
+            const new_split_free_span = self.try_claim_free_span(blocks);
+            self.free_mem_blocks += backing_blocks - blocks;
+            debug_assert(new_split_free_span != NO_IDX and new_split_free_span < self.span_list_len, DEBUG_SHOULD_HAVE_HAD_GUARANTEED_FREE_SPAN);
+            return self.span_list[new_split_free_span].mem_ptr;
         }
 
         fn raw_resize(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, new_size: usize, ret_addr: usize) bool {
-            //FIXME
             _ = ret_addr;
-            user_assert(log2_of_align <= BLOCK_SIZE);
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            for (self.pool.items) |mem_block| {
-                if (mem_block.slice.ptr == slice.ptr and mem_block.slice.len >= new_size) return true;
+            const slice_blocks = bytes_to_blocks(slice.len);
+            const new_blocks = bytes_to_blocks(new_size);
+            user_assert(slice.len > 0, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
+            user_assert(new_size > 0, USER_ERROR_REQUESTED_RESIZE_ZERO_BYTES);
+            user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
+            if (new_blocks == slice_blocks) {
+                if (should_user_assert()) {
+                    _ = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+                }
+                return true;
+            }
+            const mem_span = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+            if (new_blocks < slice_blocks) {
+                self.shrink_used_span(mem_span, new_blocks);
+                return true;
+            }
+            const grow_delta = new_blocks - self.span_list[mem_span].block_len;
+            if (self.try_grow_used_in_place_this_alloc(mem_span, grow_delta)) {
+                return true;
+            }
+            if (self.try_grow_used_in_place_backing_alloc(mem_span, grow_delta)) {
+                return true;
             }
             return false;
         }
 
         fn raw_free(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, ret_addr: usize) void {
-            //FIXME
             _ = ret_addr;
-            user_assert(log2_of_align <= BLOCK_SIZE);
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            for (self.pool.items) |*mem_block| {
-                if (mem_block.slice.ptr == slice.ptr) {
-                    mem_block.is_free = true;
-                    return;
-                }
-            }
+            user_assert(slice.len > 0, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
+            user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
+            const slice_blocks = bytes_to_blocks(slice.len);
+            const mem_span = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+            self.free_used_span(mem_span);
+            return;
         }
     };
 }
@@ -681,6 +831,14 @@ const DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM = "PooledBlockAllocator tri
 const DEBUG_ATTEMPT_TO_REMOVE_SPAN_NOT_PART_OF_LIST = "PooledBlockAllocator tried to remove a MemSpan from a list it wasn't a member of";
 const DEBUG_COLLECT_LOGICAL_FROM_END_SPAN_WASNT_LAST = "PooledBlockAllocator tried to 'collect entire logical span starting from last span', but was supplied a span that wasnt the last logical span";
 const DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS = "PooledBlockAllocator found a free or used MemSpan that had .block_len == 0";
+const DEBUG_SHOULD_HAVE_HAD_GUARANTEED_FREE_SPAN = "PooledBlockAllocator just allocated a new span for request, but .try_claim_free_span() returned NO_IDX";
+const DEBUG_SHRINK_USED_TO_ZERO_MEANS_FREE = "PooledBlockAllocator just tried to 'shrink' a used block to zero bytes... just free it if this is correct";
+const DEBUG_SHRINK_ACTUALLY_SAME_OR_GROW = "PooledBlockAllocator just tried to 'shrink' a used block to an equal or larger block size";
+const DEBUG_GROW_FREE_SPAN_IN_HOUSE = "PooledBlockAllocator just tried to grow a free span in house, but all free spans should already be fully grown to their max in-house size";
 // User Error messages
-const USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR = "The memory slice ([]u8) supplied to this allocator to free, resize, or reallocate does not exist in this allocator";
-const USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN = "The memory slice ([]u8) supplied to this allocator to free, resize, or reallocate has a different block-length than its matching memory span";
+const USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate does not exist in this allocator";
+const USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate has a different block-length than its matching memory span";
+const USER_ERROR_REQUESTED_ALLOCATE_ZERO_BYTES = "you cannot 'allocate' zero bytes of memory, if you just need an aligned pointer use `std.mem.alignBackward(usize, std.math.maxInt(usize), alignment);`";
+const USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE = "PooledBlockAllocator does not support alignments greater than the value of Config.block_size it was built with";
+const USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE = "requested allocation bytes would cause PooledBlockAllocator to exceed its maximum total (Config.block_size * std.math.maxInt(Config.index_type))";
+const USER_ERROR_REQUESTED_RESIZE_ZERO_BYTES = "cannot 'resize' an allocation to 0 bytes, use Allocator.free() or Allocator.destroy() instead";
