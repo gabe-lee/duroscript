@@ -18,26 +18,38 @@ const math = std.math;
 ///
 /// (for this setting release_fast is considered 'more optimized' than release_small)
 /// - NEVER
-/// - DEBUG
-/// - RELEASE_SAFE
-/// - RELEASE_SMALL
-/// - RELEASE_FAST
+/// - DUBUG_ONLY
+/// - RELEASE_SAFE_AND_BELOW
+/// - RELEASE_SMALL_AND_BELOW
+/// - RELEASE_FAST_AND_BELOW
 /// - ALWAYS
-pub const SafetyChecksPanic = enum(u8) {
-    /// Never panic with message on failed safety checks
+pub const SafetyCheckWithMessage = enum(u8) {
+    /// Never trigger failed safety checks
     NEVER = 0,
-    /// Only panic with message on failed safety checks in `debug` modes
-    DUBUG = 1,
+    /// Only trigger failed safety checks in `debug` modes
+    DUBUG_ONLY = 1,
     /// (Default)
     ///
-    /// Only panic with message on failed safety checks in `debug` and `release_safe` modes
-    RELEASE_SAFE = 2,
-    /// Only panic with message on failed safety checks in `debug`, `release_safe`, and `release_small` modes
-    RELEASE_SMALL = 3,
-    /// Only panic with message on failed safety checks in `debug`, `release_safe`, `release_small`, and `release_fast` mode
-    RELEASE_FAST = 4,
-    /// Always panic with message on failed safety checks regardless of compile mode
+    /// Only trigger failed safety checks in `debug` and `release_safe` modes
+    RELEASE_SAFE_AND_BELOW = 2,
+    /// Only trigger failed safety checks in `debug`, `release_safe`, and `release_small` modes
+    RELEASE_SMALL_AND_BELOW = 3,
+    /// Only trigger failed safety checks in `debug`, `release_safe`, `release_small`, and `release_fast` mode
+    RELEASE_FAST_AND_BELOW = 4,
+    /// Always trigger failed safety checks regardless of compile mode
     ALWAYS = 5,
+};
+
+pub const SafetyCheckSeverity = enum(u8) {
+    /// Triggered safety checks are logged to stderr
+    ///
+    /// This may be useful to catch multiple problems at the same time,
+    /// but will almost certainly cause undefined and possibly dangerous behavior, use with caution
+    LOG = 0,
+    /// (Default)
+    ///
+    /// Triggered safety checks panic immediately
+    PANIC = 1,
 };
 
 /// Used to set how to handle errors/nulls returned by the backing allocator
@@ -50,6 +62,30 @@ pub const AllocErrorBehavior = enum(u8) {
     PANICS = 1,
     /// Consider error/null and unreachable condition from the backing allocator (DANGEROUS but may allow compiler optimizations)
     UNREACHABLE = 2,
+};
+
+/// Used to set if and when to automatically shrink the retained pool of memory blocks held by this allocator
+pub const AutoShrinkBehavior = enum(u8) {
+    /// Never automatically shrink allocator, only manually
+    NEVER = 0,
+    /// (Default)
+    ///
+    /// Only shrink when above the threshold and a free operation causes its own entire logical allocation to be unused.
+    /// Does not worry if the shrink still doesn't drop allocator below threshold.
+    SIMPLE = 1,
+    /// Shrink when above the threshold by traversing entire free list and releasing all logical allocations that are entirely
+    /// unused until the threshold has been met, more processing but always keeps under threshold if possible
+    AGGRESSIVE = 2,
+};
+
+/// Used to set if and when to automatically shrink the retained pool of memory blocks held by this allocator
+pub const ShrinkThreshold = union(enum(u8)) {
+    /// Shrink if free memory bytes exceeds this max quantity, but NOT if it would drop free memory bytes below the min quantity
+    FLAT_MIN_MAX: struct { min: usize, max: usize },
+    /// (Default)
+    ///
+    /// Shrink if free memory exceeds this percentage of the total, but NOT if it would drop free memory below the min percentage
+    PERCENT_MIN_MAX: struct { min: f64, max: f64 },
 };
 
 /// Configuration options for generating a concrete PooledBlockAllocator type
@@ -104,13 +140,20 @@ pub const Config = struct {
     /// evaluate `@memset(_, undefined)` on the freed memory (this behavior is optimized away
     /// by the comipler in more optimized modes than `debug`)
     secure_wipe_freed_memory: bool = false,
-    /// Specifies in what levels of compiler optimization safety checks are inserted as `@panic(msg)` or `unreachable`
+    /// Specifies in what levels of compiler optimization modes safety checks are inserted as `@panic(msg)`/`std.log.err()` or as `unreachable`
     ///
-    /// DEFAULT = `.RELEASE_SAFE`
+    /// DEFAULT = `.RELEASE_SAFE_AND_BELOW`
     ///
     /// The compiler cannot optimize out the safety checks in this or any 'less optimized' mode, but give better
     /// feedback on failures in those modes
-    safety_checks_panic: SafetyChecksPanic = SafetyChecksPanic.RELEASE_SAFE,
+    safety_checks: SafetyCheckWithMessage = SafetyCheckWithMessage.RELEASE_SAFE_AND_BELOW,
+    /// Specifies how a triggered safety check message is reported (either as a `@panic(msg)` or `std.log.err()`)
+    ///
+    /// DEFAULT = `.PANIC`
+    ///
+    /// The `.LOG` setting may help see multiple errors simultaneously, but will almost certainly allow undefined and possible dangerous
+    /// behavior to occur
+    safety_check_severity: SafetyCheckSeverity = SafetyCheckSeverity.PANIC,
     /// Whether an error/null returned from the backing allocator should panic,
     /// if it should simply pass on the error/null as normal, or if it should be
     /// considered an unreachable condition
@@ -128,6 +171,24 @@ pub const Config = struct {
     /// and reduces bloat when using a small `block_size` setting. It is generally NOT recomended to change this setting
     /// unless you are absolutely sure you need to and understand the tradeoffs.
     index_type: type = u32,
+    /// How the allocator should automatically shrink the retained unused memory blocks, if at all
+    ///
+    /// DEFAULT = `.SIMPLE` (free when the opportunity arises but do not loop entire free list)
+    ///
+    /// Other options:
+    /// - `.NEVER` = Only shrink retained memory manually
+    /// - `.AGGRESSIVE` = loop over entire free list and release any allocations possible until below threshold
+    auto_shrink: AutoShrinkBehavior = .SIMPLE,
+    /// When the allocator should consider releasing unused retained memory
+    ///
+    /// DEFAULT = `.{ .PERCENT_MIN_MAX = .{ .min = 0.25, .max = 0.5 } }`
+    /// (consider releasing if free bytes >= 50% of total bytes, but NOT if it would drop below 25%)
+    ///
+    /// Other options:
+    /// - `.{ .FLAT_MIN_MAX = .{ .min = n, .max = m } }` = consider releasing when free bytes exceed this quantity, but not if it would drop below the minimum
+    ///
+    /// In any mode you can set `.min` to `0` to effectively ignore the minimum setting
+    auto_shrink_threshold: ShrinkThreshold = .{ .PERCENT_MIN_MAX = .{ .min = 0.25, .max = 0.5 } },
 };
 
 /// Enum to signal whether a MemSpan is unassigned, assigned to free, or assigned to used
@@ -151,6 +212,13 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
     if (config.backing_request_size < config.block_size) @compileError("Config.backing_request_size MUST be >= Config.block_size");
     if (config.index_type != u64 or config.index_type != u32 or config.index_type != u16 or config.index_type != u8 or config.index_type != usize)
         @compileError("Config.index_type MUST be one of the following types: u8, u16, u32, u64, usize");
+    switch (config.auto_shrink_threshold) {
+        .PERCENT_MIN_MAX => |val| {
+            if (val.min >= val.max or val.max >= 1.0)
+                @compileError("Config.auto_shrink_threshold is set to .PERCENT_MIN_MAX, but either min >= max, or max >= 1.0 (will never shrink, just use Config.auto_shrink = .NEVER instead)");
+        },
+        else => {},
+    }
     return struct {
         const Self = @This();
         const BLOCK_SIZE = config.block_size;
@@ -160,12 +228,15 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
         const BLOCK_BACKING_RATIO = BACKING_SIZE / BLOCK_SIZE;
         const LOG2_OF_BLOCK_BACKING_RATIO = LOG2_OF_BACKING_SIZE - LOG2_OF_BLOCK_SIZE;
         const WIPE_ON_FREE = config.secure_wipe_freed_memory;
-        const SAFETY_PANIC = config.safety_checks_panic;
+        const SAFETY_CHECKS = config.safety_checks;
+        const SAFETY_SEVERE = config.safety_check_severity;
         const ALLOC_ERROR = config.alloc_error_behavior;
         const WIPE_MEM_BYTE = if (builtin.mode == .Debug) 0xAA else 0x00;
         const T_IDX: type = config.index_type;
         const MAX_TOTAL_ALLOC_BYTES = (1 << @typeInfo(T_IDX).Int.bits) * BLOCK_SIZE;
         const NO_IDX = math.maxInt(T_IDX);
+        const AUTO_SHRINK = config.auto_shrink;
+        const AUTO_SHRINK_THRESH = config.auto_shrink_threshold;
 
         const MemSpanLogical = struct {
             mem_ptr: [*]u8,
@@ -244,36 +315,51 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
         /// Total number of blocks currently free
         free_mem_blocks: T_IDX,
 
-        /// Makes safety-checked assertions based on the `Config.safety_checks_panic` setting
+        /// Makes safety-checked assertions based on the `Config.safety_checks` and `Config.safety_check_severity` settings
         ///
         /// This function is used to safety check values that can be input by the user of this allocator,
         /// for behavior that should be asserted based on internally expected behavior should use `debug_assert()` instead
         inline fn user_assert(condition: bool, msg: []const u8) void {
-            switch (SAFETY_PANIC) {
+            switch (SAFETY_CHECKS) {
                 .NEVER => if (!condition) unreachable,
                 .DUBUG => if (builtin.mode == .Debug) {
-                    if (!condition) @panic(msg);
+                    if (!condition) switch (SAFETY_SEVERE) {
+                        .PANIC => @panic(msg),
+                        .LOG => std.log.err(msg, .{}),
+                    };
                 } else if (!condition) unreachable,
                 .RELEASE_SAFE => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
-                    if (!condition) @panic(msg);
+                    if (!condition) switch (SAFETY_SEVERE) {
+                        .PANIC => @panic(msg),
+                        .LOG => std.log.err(msg, .{}),
+                    };
                 } else if (!condition) unreachable,
                 .RELEASE_SMALL => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
-                    if (!condition) @panic(msg);
+                    if (!condition) switch (SAFETY_SEVERE) {
+                        .PANIC => @panic(msg),
+                        .LOG => std.log.err(msg, .{}),
+                    };
                 } else if (!condition) unreachable,
                 .RELEASE_FAST => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast) {
-                    if (!condition) @panic(msg);
+                    if (!condition) switch (SAFETY_SEVERE) {
+                        .PANIC => @panic(msg),
+                        .LOG => std.log.err(msg, .{}),
+                    };
                 } else if (!condition) unreachable,
-                .ALWAYS => if (!condition) @panic(msg),
+                .ALWAYS => if (!condition) switch (SAFETY_SEVERE) {
+                    .PANIC => @panic(msg),
+                    .LOG => std.log.err(msg, .{}),
+                },
             }
         }
 
         inline fn should_user_assert() bool {
-            return switch (SAFETY_PANIC) {
+            return switch (SAFETY_CHECKS) {
                 .NEVER => false,
-                .DUBUG => if (builtin.mode == .Debug) true else false,
-                .RELEASE_SAFE => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) true else false,
-                .RELEASE_SMALL => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) true else false,
-                .RELEASE_FAST => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast) true else false,
+                .DUBUG => builtin.mode == .Debug,
+                .RELEASE_SAFE => builtin.mode == .Debug or builtin.mode == .ReleaseSafe,
+                .RELEASE_SMALL => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall,
+                .RELEASE_FAST => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast,
                 .ALWAYS => true,
             };
         }
@@ -320,23 +406,81 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             } else return backing_blocks << LOG2_OF_BLOCK_BACKING_RATIO;
         }
 
-        inline fn clear_mem_if_needed(mem_slice: []u8) void {
-            if (WIPE_ON_FREE) {
-                @memset(@as([]volatile u8, mem_slice), WIPE_MEM_BYTE);
-            } else @memset(mem, undefined);
+        inline fn calculate_fraction_T_IDX(numer: T_IDX, denom: T_IDX) f64 {
+            return @as(f64, numer) / @as(f64, denom);
         }
 
-        pub fn new() Self {
-            var self = Self{
-                .pool = undefined,
+        inline fn is_above_max_shrink_threshold(self: *Self) bool {
+            switch (AUTO_SHRINK_THRESH) {
+                .PERCENT_MIN_MAX => |val| {
+                    return calculate_fraction_T_IDX(self.free_mem_blocks, self.total_mem_blocks) >= val.max;
+                },
+                .FLAT_MIN_MAX => |val| {
+                    return (@as(usize, self.free_mem_blocks) << LOG2_OF_BLOCK_SIZE) >= val.max;
+                },
+            }
+        }
+
+        inline fn after_shink_is_above_min_shrink_threshold(self: *Self, removed_blocks: T_IDX) bool {
+            switch (AUTO_SHRINK_THRESH) {
+                .PERCENT_MIN_MAX => |val| {
+                    return calculate_fraction_T_IDX(self.free_mem_blocks - removed_blocks, self.total_mem_blocks - removed_blocks) >= val.min;
+                },
+                .FLAT_MIN_MAX => |val| {
+                    return (@as(usize, self.free_mem_blocks - removed_blocks) << LOG2_OF_BLOCK_SIZE) >= val.min;
+                },
+            }
+        }
+
+        fn is_above_custom_max_shrink_threshold(self: *Self, threshold: ShrinkThreshold) bool {
+            @setCold(true);
+            switch (threshold) {
+                .PERCENT_MIN_MAX => |val| {
+                    return calculate_fraction_T_IDX(self.free_mem_blocks, self.total_mem_blocks) >= val.max;
+                },
+                .FLAT_MIN_MAX => |val| {
+                    return (@as(usize, self.free_mem_blocks) << LOG2_OF_BLOCK_SIZE) >= val.max;
+                },
+            }
+        }
+
+        fn after_shink_is_above_custom_min_shrink_threshold(self: *Self, threshold: ShrinkThreshold, removed_blocks: T_IDX) bool {
+            @setCold(true);
+            switch (threshold) {
+                .PERCENT_MIN_MAX => |val| {
+                    return calculate_fraction_T_IDX(self.free_mem_blocks - removed_blocks, self.total_mem_blocks - removed_blocks) >= val.min;
+                },
+                .FLAT_MIN_MAX => |val| {
+                    return (@as(usize, self.free_mem_blocks - removed_blocks) << LOG2_OF_BLOCK_SIZE) >= val.min;
+                },
+            }
+        }
+
+        inline fn clear_mem_if_needed(self: *Self, span_to_clear: T_IDX) void {
+            debug_assert(span_to_clear < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            const mem_ptr = self.span_list[span_to_clear].mem_ptr;
+            const mem_len = @as(usize, self.span_list[span_to_clear].block_len) << LOG2_OF_BLOCK_SIZE;
+            if (WIPE_ON_FREE) {
+                @memset(@as([]volatile u8, mem_ptr[0..mem_len]), WIPE_MEM_BYTE);
+            } else @memset(mem_ptr[0..mem_len], undefined);
+        }
+
+        /// creates a new instance of PooledBlockAllocator(Config) using the given backing allocator
+        ///
+        /// Does not allocate/reserve/retain any memory until the first call to its Allocator.alloc()
+        pub fn new(backing_allocator: Allocator) Self {
+            return Self{
+                .backing_alloc = backing_allocator,
+                .span_list = @ptrFromInt(mem.alignBackward(usize, math.maxInt(usize), @alignOf(MemSpan))),
+                .span_list_cap = 0,
+                .span_list_len = 0,
+                .span_list_idx = NO_IDX,
                 .first_free_span = NO_IDX,
                 .first_used_span = NO_IDX,
+                .first_unassigned_span = NO_IDX,
+                .free_mem_blocks = 0,
+                .total_mem_blocks = 0,
             };
-            //FIXME fix this
-            const list_ptr: [*]u8 = Self.raw_alloc(&self, BLOCK_SIZE, BLOCK_SIZE, 0) orelse unreachable;
-            // self.pool_capacity = BLOCK_SIZE / @sizeOf(MemBlock);
-            self.pool.items.len = 0;
-            self.pool.items.ptr = @ptrCast(@alignCast(list_ptr));
         }
 
         /// Returns an `Allocator` interface struct for this allocator
@@ -349,6 +493,111 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                     .free = raw_free,
                 },
             };
+        }
+
+        /// Given the supplied shrinking threshold, loop over entire free list and find any allocations that are entirely
+        /// unused and release them to the backing allocator or OS, but NOT if it would drop free memory below the min threshold.
+        ///
+        /// Stops when free memory is below the max threshold or free list is exhausted
+        pub fn shrink_if_possible(self: *Self, threshold: ShrinkThreshold) void {
+            @setCold(true);
+            var curr_free = self.first_free_span;
+            var is_above_threshold = self.is_above_custom_max_shrink_threshold(threshold);
+            while (curr_free != NO_IDX and is_above_threshold) {
+                debug_assert(curr_free < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                const blocks = self.span_list[curr_free].block_len;
+                if (self.span_list[curr_free].prev_logical == NO_IDX and
+                    self.span_list[curr_free].next_logical == NO_IDX and
+                    self.after_shink_is_above_custom_min_shrink_threshold(threshold, blocks))
+                {
+                    self.release_span_to_backing_or_os(curr_free);
+                }
+                curr_free = self.span_list[curr_free].next_same_state_ll;
+                is_above_threshold = self.is_above_custom_max_shrink_threshold(threshold);
+            }
+        }
+
+        /// Loops over all free and used memory and releases it to the backing allocator or OS, invalidating any existing in-use memory pointers
+        ///
+        /// Attempting to release memory still in-use is safety-checked (dependant on setting of Config.safety_checks_panic),
+        /// but full release and any applicable memory wiping will still occur before any potential error message.
+        pub fn release_all_memory(self: *Self) void {
+            const did_release_used_mem = false;
+            var span = self.first_free_span;
+            if (span == NO_IDX) span = self.first_used_span;
+            var pool_alloc_ptr = undefined;
+            var pool_alloc_blocks = 0;
+            while (span != NO_IDX) {
+                var is_pool_alloc = false;
+                const ptr = self.span_list[span].mem_ptr;
+                var blocks = self.span_list[span].block_len;
+                if (self.span_list[span].state == .ASSIGNED_FREE) {
+                    self.remove_span_from_its_linked_list(span, .ASSIGNED_FREE);
+                } else {
+                    if (span == self.span_list_idx) {
+                        is_pool_alloc = true;
+                    } else {
+                        did_release_used_mem = true;
+                        self.clear_mem_if_needed(span);
+                    }
+                    self.remove_span_from_its_linked_list(span, .ASSIGNED_USED);
+                }
+                var next = self.span_list[span].next_logical;
+                while (next != NO_IDX) {
+                    blocks += self.span_list[next].block_len;
+                    if (self.span_list[next].state == .ASSIGNED_FREE) {
+                        self.remove_span_from_its_linked_list(next, .ASSIGNED_FREE);
+                    } else {
+                        if (next == self.span_list_idx) {
+                            is_pool_alloc = true;
+                        } else {
+                            did_release_used_mem = true;
+                            self.clear_mem_if_needed(next);
+                        }
+                        self.remove_span_from_its_linked_list(next, .ASSIGNED_USED);
+                    }
+                    next = self.span_list[next].next_logical;
+                }
+                var prev = self.span_list[span].prev_logical;
+                while (prev != NO_IDX) {
+                    blocks += self.span_list[prev].block_len;
+                    if (self.span_list[prev].state == .ASSIGNED_FREE) {
+                        self.remove_span_from_its_linked_list(prev, .ASSIGNED_FREE);
+                    } else {
+                        if (prev == self.span_list_idx) {
+                            is_pool_alloc = true;
+                        } else {
+                            did_release_used_mem = true;
+                            self.clear_mem_if_needed(prev);
+                        }
+                        self.remove_span_from_its_linked_list(prev, .ASSIGNED_USED);
+                    }
+                    prev = self.span_list[prev].prev_logical;
+                }
+                if (is_pool_alloc) {
+                    pool_alloc_ptr = ptr;
+                    pool_alloc_blocks = blocks;
+                } else {
+                    self.backing_alloc.rawFree(ptr[0..(@as(usize, blocks) << LOG2_OF_BLOCK_SIZE)], LOG2_OF_BLOCK_SIZE, 0);
+                }
+                span = self.first_free_span;
+                if (span == NO_IDX) span = self.first_used_span;
+            }
+            self.clear_mem_if_needed(self.span_list_idx);
+            self.backing_alloc.rawFree(pool_alloc_ptr[0..(@as(usize, pool_alloc_blocks) << LOG2_OF_BLOCK_SIZE)], LOG2_OF_BLOCK_SIZE, 0);
+            self.* = Self{
+                .backing_alloc = self.backing_alloc,
+                .span_list = @ptrFromInt(mem.alignBackward(usize, math.maxInt(usize), @alignOf(MemSpan))),
+                .span_list_cap = 0,
+                .span_list_len = 0,
+                .span_list_idx = NO_IDX,
+                .first_free_span = NO_IDX,
+                .first_used_span = NO_IDX,
+                .first_unassigned_span = NO_IDX,
+                .free_mem_blocks = 0,
+                .total_mem_blocks = 0,
+            };
+            user_assert(!did_release_used_mem, USER_ERROR_RELEASED_USED_MEMORY);
         }
 
         fn split_free_span(self: *Self, span_idx: T_IDX, first_len: T_IDX) T_IDX {
@@ -369,13 +618,28 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             return second_idx;
         }
 
+        inline fn update_span_list_cap(self: *Self) void {
+            self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
+        }
+
+        fn add_new_unassigned_span(self: *Self) T_IDX {
+            debug_assert(self.span_list_cap > self.span_list_len, DEBUG_NO_CAP_TO_ADD_MEMSPAN);
+            self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+            self.add_span_to_begining_of_linked_list(self.span_list_len, .UNASSIGNED);
+            const new_idx = self.span_list_len;
+            self.span_list_len += 1;
+            return new_idx;
+        }
+
         fn free_used_span(self: *Self, span_idx: T_IDX) void {
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span_idx].state == .ASSIGNED_USED, DEBUG_ATTEMPT_TO_FREE_NON_USED_SPAN);
             // Remove span from used list and add it to free list with free state
             self.free_mem_blocks += self.span_list[span_idx].block_len;
+            self.clear_mem_if_needed(span_idx);
             self.remove_span_from_its_linked_list(span_idx, .ASSIGNED_USED);
             self.add_span_to_begining_of_linked_list(span_idx, .ASSIGNED_FREE);
+            var root_free = span_idx;
             // If next logical span exists and is also in free state, remove it from the free linked-list, combine its length with current span,
             // and put it in the unassigned linked-list
             const next_logical = self.span_list[span_idx].next_logical;
@@ -397,9 +661,46 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                 self.span_list[prev_logical].next_logical = self.span_list[span_idx].next_logical;
                 self.span_list[prev_logical].block_len += self.span_list[span_idx].block_len;
                 self.add_span_to_begining_of_linked_list(span_idx, .UNASSIGNED);
+                root_free = prev_logical;
             }
-            //TODO if free mem is over some amount and set to shrink automatically, go through free list and find smallest whole free allocations
-            // and release them to backing allocator
+            switch (AUTO_SHRINK) {
+                .NEVER => {},
+                .SIMPLE => {
+                    if (self.is_above_max_shrink_threshold() and self.after_shink_is_above_min_shrink_threshold(self.span_list[root_free].block_len)) {
+                        if (self.span_list[root_free].prev_logical == NO_IDX and self.span_list[root_free].next_logical == NO_IDX) {
+                            self.release_span_to_backing_or_os(root_free);
+                        }
+                    }
+                },
+                .AGGRESSIVE => {
+                    var curr_free = self.first_free_span;
+                    var is_above_threshold = self.is_above_max_shrink_threshold();
+                    while (curr_free != NO_IDX and is_above_threshold) {
+                        debug_assert(curr_free < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                        const blocks = self.span_list[curr_free].block_len;
+                        if (self.span_list[curr_free].prev_logical == NO_IDX and
+                            self.span_list[curr_free].next_logical == NO_IDX and
+                            self.after_shink_is_above_min_shrink_threshold(blocks))
+                        {
+                            self.release_span_to_backing_or_os(curr_free);
+                        }
+                        curr_free = self.span_list[curr_free].next_same_state_ll;
+                        is_above_threshold = self.is_above_max_shrink_threshold();
+                    }
+                },
+            }
+        }
+
+        fn release_span_to_backing_or_os(self: *Self, span: T_IDX) void {
+            debug_assert(self.span_list[span].prev_logical == NO_IDX and self.span_list[span].next_logical == NO_IDX, DEBUG_RELEASE_NON_FREE_SPAN);
+            debug_assert(self.span_list[span].state == .ASSIGNED_FREE, DEBUG_RELEASE_NON_FREE_SPAN);
+            const total_blocks = self.span_list[span].block_len;
+            const total_bytes = (@as(usize, total_blocks) << LOG2_OF_BLOCK_SIZE);
+            self.backing_alloc.rawFree(self.span_list[span].mem_ptr[0..total_bytes], LOG2_OF_BLOCK_SIZE, 0);
+            self.total_mem_blocks -= total_blocks;
+            self.free_mem_blocks -= total_blocks;
+            self.remove_span_from_its_linked_list(span, .ASSIGNED_FREE);
+            self.add_span_to_begining_of_linked_list(span, .UNASSIGNED);
         }
 
         fn claim_unassigned_span(self: *Self) ?T_IDX {
@@ -419,95 +720,99 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             }
             // If span_pool is not at end of logical allocation and has a free span after it that can hold the extra needed blocks,
             // extend span_pool.block_len, add a new unassigned span, and return it
-            const old_inner_bytes = @as(usize, self.span_list_cap) * @sizeOf(MemSpan);
-            if (self.span_list[self.span_list_idx].next_logical != NO_IDX) {
-                const next_logical = self.span_list[self.span_list_idx].next_logical;
-                debug_assert(next_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
-                if (self.span_list[next_logical].state == .ASSIGNED_FREE) {
-                    debug_assert(self.span_list[next_logical].block_len != 0, DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS);
-                    if (self.span_list[next_logical].block_len == 1) {
-                        self.span_list[self.span_list_idx].next_logical = self.span_list[next_logical].next_logical;
-                        self.span_list[self.span_list_idx].block_len += self.span_list[next_logical].block_len;
-                        self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
-                        self.remove_span_from_its_linked_list(next_logical, .ASSIGNED_FREE);
-                        self.span_list[next_logical].state == .UNASSIGNED;
-                        return next_logical;
-                    } else {
-                        self.span_list[self.span_list_idx].block_len += 1;
-                        self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
-                        self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+            // const old_inner_bytes = @as(usize, self.span_list_cap) * @sizeOf(MemSpan);
+            if (self.span_list_idx != NO_IDX) {
+                if (self.span_list[self.span_list_idx].next_logical != NO_IDX) {
+                    const next_logical = self.span_list[self.span_list_idx].next_logical;
+                    debug_assert(next_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                    if (self.span_list[next_logical].state == .ASSIGNED_FREE) {
+                        debug_assert(self.span_list[next_logical].block_len != 0, DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS);
+                        if (self.span_list[next_logical].block_len == 1) {
+                            self.span_list[self.span_list_idx].next_logical = self.span_list[next_logical].next_logical;
+                            self.span_list[self.span_list_idx].block_len += 1;
+                            self.free_mem_blocks -= 1;
+                            self.update_span_list_cap();
+                            self.remove_span_from_its_linked_list(next_logical, .ASSIGNED_FREE);
+                            self.span_list[next_logical].state == .UNASSIGNED;
+                            return next_logical;
+                        } else {
+                            self.span_list[self.span_list_idx].block_len += 1;
+                            self.update_span_list_cap();
+                            self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+                            const claimed_idx = self.span_list_len;
+                            self.span_list_len += 1;
+                            self.span_list[next_logical].block_len -= 1;
+                            self.free_mem_blocks -= 1;
+                            self.span_list[next_logical].mem_ptr += BLOCK_SIZE;
+                            return claimed_idx;
+                        }
+                    }
+                } else {
+                    // If span_pool IS at end of logical allocation and backing allocator will let it grow in place,
+                    // extend span_pool.block_len, add a new unassigned span, and return it
+                    const entire_logical_span = self.collect_entire_logical_span_from_last(self.span_list_idx);
+                    const old_total_bytes = blocks_to_bytes(entire_logical_span.block_len);
+                    const old_list_bytes = @as(usize, self.span_list_cap) * MemSpan.SIZE;
+                    const new_list_bytes = old_list_bytes + MemSpan.SIZE_8;
+                    const delta_grow_list_bytes = new_list_bytes - old_total_bytes;
+                    const delta_grow_backing_bytes = align_bytes_to_backing_blocks(delta_grow_list_bytes);
+                    if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], old_total_bytes + delta_grow_backing_bytes)) {
+                        const delta_grow_list_blocks = bytes_to_blocks(delta_grow_list_bytes);
+                        const delta_grow_total_blocks = bytes_to_blocks(delta_grow_backing_bytes);
+                        self.total_mem_blocks += delta_grow_total_blocks;
+                        self.span_list[self.span_list_idx].block_len += delta_grow_list_blocks;
+                        self.update_span_list_cap();
+                        if (delta_grow_total_blocks > delta_grow_list_blocks) {
+                            const extra_free_blocks = delta_grow_total_blocks - delta_grow_list_blocks;
+                            self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+                            self.assign_span_to_next_logical(self.span_list_idx, self.span_list_len, extra_free_blocks);
+                            self.add_span_to_begining_of_linked_list(self.span_list_len, .ASSIGNED_FREE);
+                            self.free_mem_blocks += extra_free_blocks;
+                            self.span_list_len += 1;
+                        }
                         const claimed_idx = self.span_list_len;
                         self.span_list_len += 1;
-                        self.span_list[next_logical].block_len -= 1;
-                        self.span_list[next_logical].mem_ptr += (@as(usize, 1) << LOG2_OF_BLOCK_SIZE);
+                        self.span_list[self.claimed_idx] = MemSpan.new_unassigned();
+                        debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
                         return claimed_idx;
                     }
                 }
-            } else {
-                // If span_pool IS at end of logical allocation and backing allocator will let it grow in place,
-                // extend span_pool.block_len, add a new unassigned span, and return it
-                const entire_logical_span = self.collect_entire_logical_span_from_last(self.span_list_idx);
-                const old_total_bytes = blocks_to_bytes(entire_logical_span.block_len);
-                const new_inner_bytes = old_inner_bytes + MemSpan.SIZE_8;
-                const delta_grow_list_bytes = old_total_bytes - new_inner_bytes;
-                const delta_grow_backing_bytes = align_bytes_to_backing_blocks(delta_grow_list_bytes);
-                if (self.backing_alloc.resize(entire_logical_span.mem_ptr[0..old_total_bytes], old_total_bytes + delta_grow_backing_bytes)) {
-                    const delta_grow_list_blocks = bytes_to_blocks(delta_grow_list_bytes);
-                    const delta_grow_total_blocks = bytes_to_blocks(delta_grow_backing_bytes);
-                    self.span_list[self.span_list_idx].block_len += delta_grow_list_blocks;
-                    self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
-                    if (delta_grow_total_blocks > delta_grow_list_blocks) {
-                        const extra_free = delta_grow_total_blocks - delta_grow_list_blocks;
-                        const new_ptr = self.span_list[self.span_list_idx].mem_ptr + (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE);
-                        self.span_list[self.span_list_len] = MemSpan.new_free(new_ptr, extra_free);
-                        self.span_list[self.span_list_len].prev_logical = self.span_list_idx;
-                        self.span_list[self.span_list_idx].next_logical = self.span_list_len;
-                        self.add_span_to_begining_of_linked_list(self.span_list_len, .ASSIGNED_FREE);
-                        self.span_list_len += 1;
-                    }
-                    const claimed_idx = self.span_list_len;
-                    self.span_list_len += 1;
-                    self.span_list[self.claimed_idx] = MemSpan.new_unassigned();
-                    debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
-                    return claimed_idx;
-                }
             }
             // Reallocate span_list for additional capacity THEN add new unassigned span
-            const new_inner_bytes = old_inner_bytes + MemSpan.SIZE_8;
-            const new_blocks_needed = bytes_to_blocks(new_inner_bytes);
-            const new_cap = blocks_to_bytes(new_blocks_needed) / @sizeOf(MemSpan);
+            const old_list_bytes = @as(usize, self.span_list_cap) * MemSpan.SIZE;
+            const new_list_bytes = old_list_bytes + MemSpan.SIZE_8;
+            const new_blocks_needed = bytes_to_blocks(new_list_bytes);
             const new_allocation_backing = blocks_to_backing_blocks(new_blocks_needed);
-            const new_allocation_blocks = backing_blocks_to_blocks(new_allocation_backing);
             const new_allocation_bytes = backing_blocks_to_bytes(new_allocation_backing);
             const new_alloc_ptr = self.backing_alloc.rawAlloc(new_allocation_bytes, MemSpan.LOG2_ALIGN, 0) orelse switch (ALLOC_ERROR) {
                 .RETURNS => return null,
                 .PANICS => @panic("PooledBlockAllocator's backing allocator failed to allocate additional memory"),
                 .UNREACHABLE => unreachable,
             };
-            const old_mem_slice = self.span_list[self.span_list_idx].mem_ptr[0..old_inner_bytes];
-            @memcpy(new_alloc_ptr, old_mem_slice);
-            self.clear_mem_if_needed(old_mem_slice);
-            self.span_list = @ptrCast(@alignCast(new_alloc_ptr));
+            const new_allocation_blocks = backing_blocks_to_blocks(new_allocation_backing);
+            self.total_mem_blocks += new_allocation_blocks;
             const old_self_idx = self.span_list_idx;
+            if (old_self_idx != NO_IDX) {
+                const old_mem_slice = self.span_list[self.span_list_idx].mem_ptr[0..old_list_bytes];
+                @memcpy(new_alloc_ptr, old_mem_slice);
+            }
+            self.span_list = @ptrCast(@alignCast(new_alloc_ptr));
             self.span_list_idx = self.span_list_len;
-            self.span_list_cap = new_cap;
             self.span_list[self.span_list_idx] = MemSpan.new_used(new_alloc_ptr, new_blocks_needed);
             self.add_span_to_begining_of_linked_list(self.span_list_idx, .ASSIGNED_USED);
+            self.update_span_list_cap();
             self.span_list_len += 1;
             if (new_allocation_blocks > new_blocks_needed) {
-                const offset_ptr = new_alloc_ptr + (@as(usize, new_blocks_needed) << LOG2_OF_BLOCK_SIZE);
-                self.span_list[self.span_list_len] = MemSpan.new_free(offset_ptr, new_allocation_blocks - new_blocks_needed);
-                self.span_list[self.span_list_len].prev_logical = self.span_list_idx;
-                self.span_list[self.span_list_idx].next_logical = self.span_list_len;
+                const extra_free_blocks = new_allocation_blocks - new_blocks_needed;
+                self.span_list[self.span_list_len] = MemSpan.new_unassigned();
+                self.assign_span_to_next_logical(self.span_list_idx, self.span_list_len, extra_free_blocks);
                 self.add_span_to_begining_of_linked_list(self.span_list_len, .ASSIGNED_FREE);
                 self.span_list_len += 1;
+                self.free_mem_blocks += extra_free_blocks;
             }
-            self.span_list[self.span_list_len] = MemSpan.new_unassigned();
-            self.add_span_to_begining_of_linked_list(self.span_list_len, .UNASSIGNED);
-            const claimed_idx = self.span_list_len;
-            self.span_list_len += 1;
+            const claimed_idx = self.add_new_unassigned_span();
             debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
-            self.free_used_span(old_self_idx);
+            if (old_self_idx != NO_IDX) self.free_used_span(old_self_idx);
             return claimed_idx;
         }
 
@@ -636,7 +941,23 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                 }
                 curr_free_span_idx = self.span_list[curr_free_span_idx].next_same_state_ll;
             }
-            // TODO loop again to see if any free span is at end of its logical allocation and backing allocator can grow it in-place
+            // Try to see if any of the existing free spans can be grown in place by the backing allocator
+            curr_free_span_idx = self.first_free_span;
+            while (curr_free_span_idx != NO_IDX) {
+                debug_assert(curr_free_span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                const needed_grow_delta = needed_blocks - self.span_list[curr_free_span_idx].block_len;
+                const did_grow_in_place = self.try_grow_free_in_place_backing_alloc(curr_free_span_idx, needed_grow_delta);
+                if (did_grow_in_place) {
+                    if (self.span_list[curr_free_span_idx].block_len > needed_blocks) {
+                        _ = self.split_free_span(curr_free_span_idx, needed_blocks);
+                    }
+                    self.remove_span_from_its_linked_list(curr_free_span_idx, .ASSIGNED_FREE);
+                    self.add_span_to_begining_of_linked_list(curr_free_span_idx, .ASSIGNED_USED);
+                    self.free_mem_blocks -= self.span_list[curr_free_span_idx].block_len;
+                    return curr_free_span_idx;
+                }
+                curr_free_span_idx = self.span_list[curr_free_span_idx].next_same_state_ll;
+            }
             return NO_IDX;
         }
 
@@ -693,6 +1014,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
 
         fn try_grow_free_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            debug_assert(self.span_list[span].state == .ASSIGNED_FREE, DEBUG_GROW_FREE_FROM_BACKING_NOT_FREE);
             const next = self.span_list[span].next_logical;
             if (next == NO_IDX) {
                 const entire_logical_span = self.collect_entire_logical_span_from_last(span);
@@ -711,6 +1033,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
 
         fn try_grow_used_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            debug_assert(self.span_list[span].state == .ASSIGNED_USED, DEBUG_GROW_USED_FROM_BACKING_NOT_USED);
             const next = self.span_list[span].next_logical;
             if (next == NO_IDX) {
                 const entire_logical_span = self.collect_entire_logical_span_from_last(span);
@@ -738,7 +1061,7 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             const self: *Self = @ptrCast(@alignCast(self_opaque));
             const blocks = bytes_to_blocks(bytes);
             user_assert(bytes > 0, USER_ERROR_REQUESTED_ALLOCATE_ZERO_BYTES);
-            user_assert(self.total_mem_blocks + blocks <= std.math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
+            user_assert(self.total_mem_blocks + blocks <= math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
             user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
             const existing_free_span = self.try_claim_free_span(blocks);
             if (existing_free_span != NO_IDX) return self.span_list[existing_free_span].mem_ptr;
@@ -835,6 +1158,10 @@ const DEBUG_SHOULD_HAVE_HAD_GUARANTEED_FREE_SPAN = "PooledBlockAllocator just al
 const DEBUG_SHRINK_USED_TO_ZERO_MEANS_FREE = "PooledBlockAllocator just tried to 'shrink' a used block to zero bytes... just free it if this is correct";
 const DEBUG_SHRINK_ACTUALLY_SAME_OR_GROW = "PooledBlockAllocator just tried to 'shrink' a used block to an equal or larger block size";
 const DEBUG_GROW_FREE_SPAN_IN_HOUSE = "PooledBlockAllocator just tried to grow a free span in house, but all free spans should already be fully grown to their max in-house size";
+const DEBUG_NO_CAP_TO_ADD_MEMSPAN = "PooledBlockAllocator just tried to push another MemSpan to the ensd of the list when .span_pool_len >= .span_pool_cap";
+const DEBUG_GROW_FREE_FROM_BACKING_NOT_FREE = "PooledBlockAllocator just tried to grow a 'free' span in place from the backing allocator, but it wasnt in 'free' state";
+const DEBUG_GROW_USED_FROM_BACKING_NOT_USED = "PooledBlockAllocator just tried to grow a 'used' span in place from the backing allocator, but it wasnt in 'used' state";
+const DEBUG_RELEASE_NON_FREE_SPAN = "PooledBlockAllocator just tried to release a non-free span to the backing allocator or OS";
 // User Error messages
 const USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate does not exist in this allocator";
 const USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate has a different block-length than its matching memory span";
@@ -842,3 +1169,4 @@ const USER_ERROR_REQUESTED_ALLOCATE_ZERO_BYTES = "you cannot 'allocate' zero byt
 const USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE = "PooledBlockAllocator does not support alignments greater than the value of Config.block_size it was built with";
 const USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE = "requested allocation bytes would cause PooledBlockAllocator to exceed its maximum total (Config.block_size * std.math.maxInt(Config.index_type))";
 const USER_ERROR_REQUESTED_RESIZE_ZERO_BYTES = "cannot 'resize' an allocation to 0 bytes, use Allocator.free() or Allocator.destroy() instead";
+const USER_ERROR_RELEASED_USED_MEMORY = "PooledBlockAllocator.release_all_memory() reported that some of the memory released was still in-use";
