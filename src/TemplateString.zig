@@ -1,15 +1,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
-const ListUm = std.ArrayListUnmanaged;
+const List = std.ArrayListUnmanaged;
 const IdentBlock = @import("./IdentBlock.zig");
 const TOK = @import("./Token.zig").KIND;
 const UNI = @import("./Unicode.zig");
 const ASC = UNI.ASCII;
+const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
 const SourceReader = @import("./SourceReader.zig");
 const NoticeManager = @import("./NoticeManager.zig");
+const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
-const nkind_string = NoticeManager.kind_string;
+const APPEND_PANIC_MSG = @import("./Constants.zig").APPEND_PANIC_MSG;
 
 const ParsingAllocator = @import("./ParsingAllocator.zig");
 const ProgramROM = @import("./ProgramROM.zig");
@@ -18,16 +20,13 @@ const Self = @This();
 
 const IDENT_LIST_OFFSET = @sizeOf(u32) * 6;
 
+slice: [*]const u8,
 segment_count: u32,
 ident_count: u32,
 replace_list_offset: u32,
 const_list_offset: u32,
 const_source_offset: u32,
 segment_list_offset: u32,
-
-pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NOTICE) TemplateStringParseResult {
-    return TemplateStringLexed.parse_from_source(source, notice_kind);
-}
 
 const ReplaceSegment = struct {
     input: u32,
@@ -42,21 +41,14 @@ const ConstSegment = struct {
     end: u32,
 };
 
-const TemplateStringParseResult = struct {
-    ptr: u64,
-    len: u32,
-    token: TOK,
-    t_string: Self,
-};
-
-const TemplateStringLexed = struct {
+pub const TemplateStringLexed = struct {
     alloc: Allocator,
-    const_source: ListUm(u8),
+    const_source: List(u8),
     seg_count: u32,
-    seg_list: ListUm(u8),
-    ident_list: ListUm(IdentBlock),
-    const_list: ListUm(ConstSegment),
-    replace_list: ListUm(ReplaceSegment),
+    seg_list: List(u8),
+    ident_list: List(IdentBlock),
+    const_list: List(ConstSegment),
+    replace_list: List(ReplaceSegment),
 
     const SIDX_MASK = 0b11111111_11111111_11111111_11111000;
     const SIDX_SHIFT = 3;
@@ -66,16 +58,16 @@ const TemplateStringLexed = struct {
     fn create() TemplateStringLexed {
         return TemplateStringLexed{
             .alloc = ParsingAllocator.global.alloc,
-            .const_source = ListUm(u8){},
+            .const_source = List(u8){},
             .seg_count = 0,
-            .seg_list = ListUm(u8){},
-            .ident_list = ListUm(IdentBlock){},
-            .const_list = ListUm(ConstSegment){},
-            .replace_list = ListUm(ReplaceSegment){},
+            .seg_list = List(u8){},
+            .ident_list = List(IdentBlock){},
+            .const_list = List(ConstSegment){},
+            .replace_list = List(ReplaceSegment){},
         };
     }
 
-    fn destroy(self: *TemplateStringLexed) void {
+    fn cleanup(self: *TemplateStringLexed) void {
         self.const_source.deinit(self.alloc);
         self.seg_list.deinit(self.alloc);
         self.ident_list.deinit(self.alloc);
@@ -84,30 +76,31 @@ const TemplateStringLexed = struct {
         self.seg_count = 0;
     }
 
-    fn push_const_segment(self: *TemplateStringLexed, bytes: []const u8) !void {
+    fn push_const_segment(self: *TemplateStringLexed, bytes: []const u8) void {
         const real_idx = (self.seg_count & SIDX_MASK) >> SIDX_SHIFT;
         if (real_idx == self.seg_list.items.len) {
-            try self.seg_list.append(self.alloc, 0);
+            self.seg_list.append(self.alloc, 0) catch @panic(APPEND_PANIC_MSG);
         }
         self.seg_count += 1;
         const start: u32 = @intCast(self.const_source.items.len);
-        try self.const_source.appendSlice(self.alloc, bytes);
+        self.const_source.appendSlice(self.alloc, bytes) catch @panic(APPEND_PANIC_MSG);
         const end: u32 = @intCast(self.const_source.items.len);
-        try self.const_list.append(self.alloc, ConstSegment{ .start = start, .end = end });
+        self.const_list.append(self.alloc, ConstSegment{ .start = start, .end = end }) catch @panic(APPEND_PANIC_MSG);
     }
 
-    fn push_replace_segment(self: *TemplateStringLexed, seg: ReplaceSegment) !void {
+    fn push_replace_segment(self: *TemplateStringLexed, seg: ReplaceSegment) void {
         const real_idx = (self.seg_count & SIDX_MASK) >> SIDX_SHIFT;
         const sub_idx: u8 = @truncate(self.seg_count & SSUB_MASK);
         if (real_idx == self.seg_list.items.len) {
-            try self.seg_list.append(self.alloc, 0);
+            self.seg_list.append(self.alloc, 0) catch @panic(APPEND_PANIC_MSG);
         }
         self.seg_list.items[real_idx] |= @as(u8, 1) << @intCast(sub_idx);
         self.seg_count += 1;
-        self.replace_list.append(self.alloc, seg) catch unreachable;
+        self.replace_list.append(self.alloc, seg) catch @panic(APPEND_PANIC_MSG);
     }
 
-    fn serialize_to_ROM(self: *TemplateStringLexed, token: TOK) TemplateStringParseResult {
+    fn serialize_to_ROM(self: *TemplateStringLexed, token: *TokenBuilder) void {
+        assert(token.kind == TOK.LIT_STR_TEMPLATE);
         const program_rom = &ProgramROM.global;
         const replace_list_len: u32 = @truncate(self.replace_list.items.len * @sizeOf(ReplaceSegment));
         const const_list_len: u32 = @truncate(self.const_list.items.len * @sizeOf(ConstSegment));
@@ -140,97 +133,89 @@ const TemplateStringLexed = struct {
         program_rom.write_slice(u8, self.const_source.items);
         program_rom.write_slice(u8, self.seg_list.items);
         assert(len == program_rom.len - ptr);
-        return TemplateStringParseResult{
-            .ptr = ptr,
-            .len = len,
-            .token = token,
-            .t_string = Self{
-                .segment_count = self.seg_count,
-                .ident_count = @intCast(self.ident_list.items.len),
-                .replace_list_offset = replace_list_offset,
-                .const_list_offset = const_list_offset,
-                .const_source_offset = const_source_offset,
-                .segment_list_offset = seg_list_offset,
-            },
-        };
+        token.data_val_or_ptr = ptr;
+        token.data_len = len;
+        self.cleanup();
+        return;
     }
 
-    fn parse_from_source(source: *SourceReader, comptime notice_kind: NOTICE) TemplateStringParseResult {
-        var kind = TOK.LIT_STR_TEMPLATE;
+    pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder) void {
+        token.kind = TOK.LIT_STR_TEMPLATE;
         var t_string = TemplateStringLexed.create();
         var is_escape: bool = false;
-        var const_builder = ListUm(u8){};
+        var const_builder = List(u8){};
         defer const_builder.deinit(t_string.alloc);
         parseloop: while (!source.is_complete()) {
-            const char = source.read_next_utf8_char(notice_kind);
+            const char = source.read_next_utf8_char(token);
             switch (is_escape) {
                 true => {
                     is_escape = false;
                     switch (char.code) {
                         ASC.n => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch unreachable;
+                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.t => {
-                            const_builder.append(t_string.alloc, ASC.H_TAB) catch unreachable;
+                            const_builder.append(t_string.alloc, ASC.H_TAB) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.r => {
-                            const_builder.append(t_string.alloc, ASC.CR) catch unreachable;
+                            const_builder.append(t_string.alloc, ASC.CR) catch @panic(APPEND_PANIC_MSG);
                         },
-                        ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK, ASC.L_CURLY, ASC.R_CURLY => {
-                            const_builder.append(t_string.alloc, char.bytes[0]) catch unreachable;
+                        ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK, ASC.L_CURLY => {
+                            const_builder.append(t_string.alloc, char.bytes[0]) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.o => {
-                            const utf8 = source.read_next_n_bytes_as_octal_escape(notice_kind, 'o', 3);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                            const utf8 = source.read_next_n_bytes_as_octal_escape('o', 3, token);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.x => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'x', 2);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                            const utf8 = source.read_next_n_bytes_as_hex_escape('x', 2, token);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.u => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'u', 4);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                            const utf8 = source.read_next_n_bytes_as_hex_escape('u', 4, token);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
                         },
                         ASC.U => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape(notice_kind, 'U', 8);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch unreachable;
+                            const utf8 = source.read_next_n_bytes_as_hex_escape('U', 8, token);
+                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
                         },
                         else => {
-                            source.add_illegal_string_escape_sequence_notice(notice_kind, char.code);
-                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
+                            token.attach_notice_here(NOTICE.illegal_string_escape_sequence, SEVERITY.ERROR, source);
+                            token.kind = TOK.ILLEGAL;
+                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch @panic(APPEND_PANIC_MSG);
                         },
                     }
                 },
                 else => {
                     switch (char.code) {
                         ASC.NEWLINE => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch unreachable;
+                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
                             source.skip_whitespace_except_newline();
                             if (!source.is_complete()) {
-                                const next_byte = source.read_next_ascii(notice_kind);
+                                const next_byte = source.read_next_ascii(token);
                                 switch (next_byte) {
                                     ASC.BACKTICK => {},
                                     ASC.NEWLINE => {
                                         if (const_builder.items.len > 0) {
-                                            t_string.push_const_segment(const_builder.items) catch unreachable;
+                                            t_string.push_const_segment(const_builder.items);
                                             const_builder.clearAndFree(t_string.alloc);
                                         }
-                                        source.add_runaway_multiline_notice(notice_kind);
-                                        kind = TOK.ILLEGAL;
+                                        token.attach_notice_here(NOTICE.runaway_multiline_string, SEVERITY.ERROR, source);
+                                        token.kind = TOK.ILLEGAL;
                                         break :parseloop;
                                     },
                                     else => {
-                                        source.add_illegal_char_multiline_notice(notice_kind, next_byte);
-                                        kind = TOK.ILLEGAL;
+                                        token.attach_notice_here(NOTICE.non_whitespace_before_backtick_in_multiline_string, SEVERITY.ERROR, source);
+                                        token.kind = TOK.ILLEGAL;
                                     },
                                 }
                             } else {
                                 if (const_builder.items.len > 0) {
-                                    t_string.push_const_segment(const_builder.items) catch unreachable;
+                                    t_string.push_const_segment(const_builder.items);
                                     const_builder.clearAndFree(t_string.alloc);
                                 }
-                                source.add_source_end_before_string_end_notice(notice_kind);
-                                kind = TOK.ILLEGAL;
+                                token.attach_notice_here(NOTICE.source_ended_before_string_terminated, SEVERITY.ERROR, source);
+                                token.kind = TOK.ILLEGAL;
                                 break :parseloop;
                             }
                         },
@@ -239,25 +224,22 @@ const TemplateStringLexed = struct {
                         },
                         ASC.L_CURLY => {
                             if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items) catch unreachable;
+                                t_string.push_const_segment(const_builder.items);
                                 const_builder.clearRetainingCapacity();
                             }
-                            const full_start = source.curr.pos;
                             source.skip_whitespace();
-                            const ident_result = IdentBlock.parse_from_source(source, notice_kind);
-                            if (ident_result.illegal) {
-                                kind = TOK.ILLEGAL;
-                            }
+                            const ident_result = IdentBlock.parse_from_source(source, token, false);
+
                             var ident_idx: u32 = 0;
                             while (ident_idx < t_string.ident_list.items.len) {
                                 if (IdentBlock.eql(ident_result.ident, t_string.ident_list.items[ident_idx])) break;
                                 ident_idx += 1;
                             }
                             if (ident_idx == t_string.ident_list.items.len) {
-                                t_string.ident_list.append(t_string.alloc, ident_result.ident) catch unreachable;
+                                t_string.ident_list.append(t_string.alloc, ident_result.ident) catch @panic(APPEND_PANIC_MSG);
                             }
                             source.skip_whitespace();
-                            const separator_or_end = source.read_next_ascii(notice_kind);
+                            const separator_or_end = source.read_next_ascii(token);
                             const format_start = source.curr.pos;
                             switch (separator_or_end) {
                                 ASC.R_CURLY => {},
@@ -266,50 +248,35 @@ const TemplateStringLexed = struct {
                                     source.skip_until_byte_match(ASC.R_CURLY);
                                 },
                                 else => {
+                                    token.attach_notice_here(NOTICE.illegal_char_after_template_string_replace_ident, SEVERITY.ERROR, source);
+                                    token.kind = TOK.ILLEGAL;
                                     source.skip_until_byte_match(ASC.R_CURLY);
-                                    source.add_illegal_char_after_template_string_replace_ident(notice_kind, source.source[full_start..source.curr.pos]);
-                                    kind = TOK.ILLEGAL;
                                 },
                             }
                             t_string.push_replace_segment(ReplaceSegment{
                                 .start = format_start,
                                 .end = source.curr.pos,
                                 .input = ident_idx,
-                            }) catch unreachable;
-                        },
-                        ASC.R_CURLY => {
-                            kind = TOK.ILLEGAL;
-                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch unreachable;
+                            });
                         },
                         ASC.DUBL_QUOTE => {
                             if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items) catch unreachable;
+                                t_string.push_const_segment(const_builder.items);
                             }
                             break :parseloop;
                         },
                         else => {
-                            const_builder.appendSlice(t_string.alloc, char.bytes[0..char.len]) catch unreachable;
+                            const_builder.appendSlice(t_string.alloc, char.bytes[0..char.len]) catch @panic(APPEND_PANIC_MSG);
                         },
                     }
                 },
             }
         }
-        if (kind == TOK.ILLEGAL) {
-            return TemplateStringParseResult{
-                .ptr = 0,
-                .len = 0,
-                .token = kind,
-                .t_string = Self{
-                    .const_list_offset = 0,
-                    .const_source_offset = 0,
-                    .ident_count = 0,
-                    .replace_list_offset = 0,
-                    .segment_count = 0,
-                    .segment_list_offset = 0,
-                },
-            };
+        if (token.kind == TOK.ILLEGAL) {
+            t_string.cleanup();
+            return;
         }
-        return t_string.serialize_to_ROM(kind);
+        return t_string.serialize_to_ROM(token);
     }
 };
 

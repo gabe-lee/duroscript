@@ -1,10 +1,13 @@
 const ASC = @import("./Unicode.zig").ASCII;
+const TOK = @import("./Token.zig").KIND;
 const std = @import("std");
+const assert = std.debug.assert;
 const SourceReader = @import("./SourceReader.zig");
 const NoticeManager = @import("./NoticeManager.zig");
 const IdentBlock = @import("./IdentBlock.zig");
-const NKIND = NoticeManager.KIND;
-const nkind_string = NoticeManager.kind_string;
+const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
+const SEVERITY = NoticeManager.SEVERITY;
+const NOTICE = NoticeManager.KIND;
 
 const Self = @This();
 pub const INNER = [6]u64;
@@ -33,36 +36,29 @@ pub inline fn eql(self: Self, other: Self) bool {
         (self.data[5] ^ other.data[5])) == 0;
 }
 
-pub fn parse_from_string(string: []const u8, comptime notice_kind: NKIND) IdentParseResult {
+pub fn compile_keyword(comptime string: []const u8, comptime is_builtin: bool) IdentBlock {
     var source = SourceReader.new("(STRING)", string);
-    return parse_from_source(&source, notice_kind);
+    var token = TokenBuilder.new(0, &source);
+    const ident = parse_from_source(&source, &token, is_builtin);
+    if (token.kind == TOK.ILLEGAL or (token.has_notice and (@intFromEnum(token.notice_severity) >= @intFromEnum(SEVERITY.ERROR)))) {
+        @compileError("FAILED TO COMPILE DUROSCRIPT KEYWORD");
+    }
+    return ident;
 }
 
-pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NKIND) IdentParseResult {
+pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime is_builtin: bool) IdentBlock {
+    assert(source.data.len > source.curr.pos);
     var ident = INNER{ 0, 0, 0, 0, 0, 0 };
-    if (source.is_complete()) {
-        source.add_source_end_before_expected_token_notice(notice_kind);
-        return IdentParseResult{
-            .ident = IdentBlock{
-                .data = ident,
-            },
-            .len = 0,
-            .illegal = true,
-        };
-    }
-    var illegal = false;
-    var too_long = false;
-    var first_digit = false;
-    var bit_idx: u8 = 0;
+    var bit_idx: u8 = if (is_builtin) 6 else 0;
     var int_idx: u8 = 0;
     var len: usize = 0;
     const start_pos = source.curr.pos;
-    if (source.source[source.curr.pos] >= ASC._0 and source.source[source.curr.pos] <= ASC._9) {
-        illegal = true;
-        first_digit = true;
+    if (source.data[source.curr.pos] >= ASC._0 and source.data[source.curr.pos] <= ASC._9) {
+        token.attach_notice_here(NOTICE.ident_first_byte_is_digit, SEVERITY.ERROR, source);
+        token.kind = TOK.ILLEGAL;
     }
-    while (source.curr.pos < source.source.len) {
-        const byte = source.source[source.curr.pos];
+    while (source.curr.pos < source.data.len) {
+        const byte = source.data[source.curr.pos];
         const val: u64 = switch (byte) {
             ASC._0...ASC._9 => (byte - ASC._0) + DIGIT_OFFSET,
             ASC.A...ASC.Z => (byte - ASC.A) + UPPER_OFFSET,
@@ -75,8 +71,8 @@ pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NKIND) Ide
         source.curr.advance_one_col(1);
         len += 1;
         if (int_idx >= 6) {
-            illegal = true;
-            too_long = true;
+            token.attach_notice_here(NOTICE.ident_too_long, SEVERITY.ERROR, source);
+            token.kind = TOK.ILLEGAL;
         } else {
             ident[int_idx] |= val << @intCast(bit_idx);
             if (bit_idx != 0 and int_idx < 5) {
@@ -87,20 +83,11 @@ pub fn parse_from_source(source: *SourceReader, comptime notice_kind: NKIND) Ide
             bit_idx &= 63;
         }
     }
-    if (too_long) {
-        const total_len = source.curr.pos - start_pos;
-        source.add_ident_too_long_notice(notice_kind, total_len, source.source[start_pos..source.curr.pos]);
-    } else if (source.curr.pos == start_pos) {
-        source.add_ident_expected_but_not_found_notice(notice_kind);
+    if (source.curr.pos == start_pos) {
+        token.attach_notice_here(NOTICE.expected_identifier_here, SEVERITY.ERROR, source);
+        token.kind = TOK.ILLEGAL;
     }
-    if (first_digit) {
-        source.add_ident_first_byte_is_digit_notice(notice_kind, source.source[start_pos..source.curr.pos]);
-    }
-    return IdentParseResult{
-        .ident = IdentBlock{
-            .data = ident,
-        },
-        .len = len,
-        .illegal = illegal,
+    return IdentBlock{
+        .data = ident,
     };
 }

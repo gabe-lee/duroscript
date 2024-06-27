@@ -1,12 +1,7 @@
 const std = @import("std");
-const GpaBuilder = std.heap.GeneralPurposeAllocator;
-const GpaConfig = std.heap.GeneralPurposeAllocatorConfig;
-const Arena = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 
 const Self = @This();
-const CONFIG = GpaConfig{};
-const GpaType = GpaBuilder(CONFIG);
 
 alloc: Allocator,
 
