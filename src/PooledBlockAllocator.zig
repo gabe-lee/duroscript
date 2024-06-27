@@ -34,7 +34,7 @@ pub const SafetyCheckWithMessage = enum(u8) {
     RELEASE_SAFE_AND_BELOW = 2,
     /// Only trigger failed safety checks in `debug`, `release_safe`, and `release_small` modes
     RELEASE_SMALL_AND_BELOW = 3,
-    /// Only trigger failed safety checks in `debug`, `release_safe`, `release_small`, and `release_fast` mode
+    /// Only trigger failed safety checks in `debug`, `release_safe`, `release_small`, and `release_fast` modes
     RELEASE_FAST_AND_BELOW = 4,
     /// Always trigger failed safety checks regardless of compile mode
     ALWAYS = 5,
