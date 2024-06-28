@@ -76,9 +76,9 @@ pub const SourceData = struct {
     }
 };
 
-pub fn new() Self {
+pub fn new(alloc: Allocator) Self {
     return Self{
-        .alloc = std.heap.page_allocator,
+        .alloc = alloc,
         .path_list = List([]const u8){},
     };
 }
@@ -106,4 +106,4 @@ pub fn get_source_key(self: *Self, complete_path: []const u8) u16 {
 }
 
 //CHECKPOINT
-pub fn load_file(self: *Self, source_key: u16) []const u8 {}
+// pub fn load_file(self: *Self, source_key: u16) []const u8 {}

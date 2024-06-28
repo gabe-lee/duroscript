@@ -10,8 +10,6 @@ const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
 
 const Self = @This();
 
-pub var global: Self = undefined;
-
 alloc: Allocator,
 notice_list: List(Notice),
 panic_count: usize = 0,
@@ -20,9 +18,9 @@ warn_count: usize = 0,
 hint_count: usize = 0,
 info_count: usize = 0,
 
-pub fn new() Self {
+pub fn new(alloc: Allocator) Self {
     return Self{
-        .alloc = std.heap.page_allocator,
+        .alloc = alloc,
         .notice_list = List(Notice){},
     };
 }

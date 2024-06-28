@@ -4,6 +4,7 @@ const AllocError = std.mem.Allocator.Error;
 const builtin = @import("builtin");
 const mem = std.mem;
 const math = std.math;
+const BlockAllocator = @import("./BlockAllocator.zig");
 
 /// Used to set in what compile modes safety checks are inserted as `@panic(msg)`
 /// as opposed to `unreachable`
@@ -206,7 +207,7 @@ const LOG2_OF_MAX_ALIGN = math.log2_int(comptime_int, MAX_ALIGN);
 
 /// Defines a new concrete PooledBlockAllocator type that uses the provided `Config` struct to build all the necessary constants and safety checks
 /// for this allocator.
-pub fn PooledBlockAllocator(comptime config: Config) type {
+pub fn define(comptime config: Config) type {
     if (!math.isPowerOfTwo(config.block_size) or config.block_size < 64) @compileError("Config.block_size MUST be a power of 2 and >= 64 (64, 128, 256, 512, 1024, 2048, 4096, ... etc)");
     if (!math.isPowerOfTwo(config.backing_request_size)) @compileError("Config.backing_request_size MUST be a power of 2 and >= 64 (64, 128, 256, 512, 1024, 2048, 4096, ... etc)");
     if (config.backing_request_size < config.block_size) @compileError("Config.backing_request_size MUST be >= Config.block_size");
@@ -488,6 +489,18 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             return Allocator{
                 .ptr = self,
                 .vtable = &Allocator.VTable{
+                    .alloc = raw_alloc_ptr_only,
+                    .resize = raw_resize_bool_only,
+                    .free = raw_free,
+                },
+            };
+        }
+
+        /// Returns a `BlockAllocator` interface struct for this allocator
+        pub fn block_allocator(self: *Self) BlockAllocator {
+            return BlockAllocator{
+                .interface = .{
+                    .self_opaque = self,
                     .alloc = raw_alloc,
                     .resize = raw_resize,
                     .free = raw_free,
@@ -1056,7 +1069,11 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             return false;
         }
 
-        fn raw_alloc(self_opaque: *anyopaque, bytes: usize, log2_of_align: u8, ret_addr: usize) ?[*]u8 {
+        fn raw_alloc_ptr_only(self_opaque: *anyopaque, bytes: usize, log2_of_align: u8, ret_addr: usize) ?[*]u8 {
+            return if (Self.raw_alloc(self_opaque, bytes, log2_of_align, ret_addr)) |slice| slice.ptr else null;
+        }
+
+        fn raw_alloc(self_opaque: *anyopaque, bytes: usize, log2_of_align: u8, ret_addr: usize) ?[]u8 {
             _ = ret_addr;
             const self: *Self = @ptrCast(@alignCast(self_opaque));
             const blocks = bytes_to_blocks(bytes);
@@ -1087,10 +1104,14 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
             const new_split_free_span = self.try_claim_free_span(blocks);
             self.free_mem_blocks += backing_blocks - blocks;
             debug_assert(new_split_free_span != NO_IDX and new_split_free_span < self.span_list_len, DEBUG_SHOULD_HAVE_HAD_GUARANTEED_FREE_SPAN);
-            return self.span_list[new_split_free_span].mem_ptr;
+            return self.span_list[new_split_free_span].mem_ptr[0..blocks_to_bytes(blocks)];
         }
 
-        fn raw_resize(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, new_size: usize, ret_addr: usize) bool {
+        fn raw_resize_bool_only(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, new_size: usize, ret_addr: usize) bool {
+            return Self.raw_resize(self_opaque, slice, log2_of_align, new_size, ret_addr) != null;
+        }
+
+        fn raw_resize(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, new_size: usize, ret_addr: usize) ?usize {
             _ = ret_addr;
             const self: *Self = @ptrCast(@alignCast(self_opaque));
             const slice_blocks = bytes_to_blocks(slice.len);
@@ -1102,21 +1123,21 @@ pub fn PooledBlockAllocator(comptime config: Config) type {
                 if (should_user_assert()) {
                     _ = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
                 }
-                return true;
+                return blocks_to_bytes(new_blocks);
             }
             const mem_span = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
             if (new_blocks < slice_blocks) {
                 self.shrink_used_span(mem_span, new_blocks);
-                return true;
+                return blocks_to_bytes(new_blocks);
             }
             const grow_delta = new_blocks - self.span_list[mem_span].block_len;
             if (self.try_grow_used_in_place_this_alloc(mem_span, grow_delta)) {
-                return true;
+                return blocks_to_bytes(new_blocks);
             }
             if (self.try_grow_used_in_place_backing_alloc(mem_span, grow_delta)) {
-                return true;
+                return blocks_to_bytes(new_blocks);
             }
-            return false;
+            return null;
         }
 
         fn raw_free(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, ret_addr: usize) void {
