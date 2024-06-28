@@ -3,41 +3,59 @@ const mem = std.mem;
 const math = std.math;
 const assert = std.debug.assert;
 const BlockAllocator = @import("./BlockAllocator.zig");
-const Allocator = std.mem.Allocator;
+const AllocError = BlockAllocator.AllocError;
 
-pub fn define(comptime T: type, comptime allocator_ptr: *BlockAllocator) type {
-    return define_with_alignment(T, null, allocator_ptr);
+pub inline fn define(comptime T: type, comptime allocator_ptr: *BlockAllocator) type {
+    return define_with_sentinel_and_align(T, null, null, allocator_ptr);
 }
 
-pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptime allocator_ptr: *BlockAllocator) type {
+pub inline fn define_with_sentinel(comptime T: type, comptime sentinel: T, comptime allocator_ptr: *BlockAllocator) type {
+    return define_with_sentinel_and_align(T, sentinel, null, allocator_ptr);
+}
+
+pub inline fn define_with_align(comptime T: type, comptime alignment: ?u29, comptime allocator_ptr: *BlockAllocator) type {
+    return define_with_sentinel_and_align(T, null, alignment, allocator_ptr);
+}
+
+pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, comptime alignment: ?u29, comptime allocator_ptr: *BlockAllocator) type {
     if (alignment) |a| {
         if (a == @alignOf(T)) {
-            return define_with_alignment(T, null, allocator_ptr);
+            return define_with_sentinel_and_align(T, sentinel, null, allocator_ptr);
         }
     }
 
     return struct {
         const Self = @This();
-        const alloc: *BlockAllocator = allocator_ptr;
+        pub const alloc: *BlockAllocator = allocator_ptr;
 
         items: Slice,
         capacity: usize,
 
-        pub const Slice = if (alignment) |a| ([]align(a) T) else []T;
+        pub const Slice = eval: {
+            if (alignment) |a| {
+                if (sentinel) |s| {
+                    break :eval [:s]align(a) T;
+                } else {
+                    break :eval []align(a) T;
+                }
+            } else {
+                if (sentinel) |s| {
+                    break :eval [:s]T;
+                } else {
+                    break :eval []T;
+                }
+            }
+        };
 
-        pub fn SentinelSlice(comptime s: T) type {
-            return if (alignment) |a| ([:s]align(a) T) else [:s]T;
-        }
-
-        pub fn new() Self {
+        pub fn create() Self {
             return Self{
                 .items = &[_]T{},
                 .capacity = 0,
             };
         }
 
-        pub fn new_with_capacity(num: usize) Allocator.Error!Self {
-            var self = Self.new();
+        pub fn create_with_capacity(num: usize) AllocError!Self {
+            var self = Self.create();
             try self.ensure_capacity_exact(num);
             return self;
         }
@@ -48,9 +66,8 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             }
         }
 
-        /// StaticAllocList takes ownership of the passed in slice. The slice must have been
-        /// allocated with `allocator`.[:sentinel]T
-        /// Deinitialize with `deinit` or use `toOwnedSlice`.
+        /// List takes ownership of the passed in slice. The slice must have been
+        /// allocated with `allocator`
         pub fn take_ownership_of(slice: Slice) Self {
             return Self{
                 .items = slice,
@@ -58,9 +75,8 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             };
         }
 
-        /// StaticAllocList takes ownership of the passed in slice. The slice must have been
+        /// List takes ownership of the passed in slice. The slice must have been
         /// allocated with `allocator`.
-        /// Deinitialize with `deinit` or use `toOwnedSlice`.
         pub fn take_ownership_of_sentinel(comptime sentinel: T, slice: SentinelSlice(sentinel)) Self {
             return Self{
                 .items = slice,
@@ -68,13 +84,14 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             };
         }
 
-        /// The caller owns the returned memory. Empties this StaticAllocList,
-        /// Its capacity is cleared, making deinit() safe but unnecessary to call.
-        pub fn hand_over_ownership(self: *Self) Allocator.Error!Slice {
+        /// The caller takes ownership of the slice and is responsible for freeing its memory when done
+        ///
+        /// This list is empty and re-usable afterwards
+        pub fn hand_over_ownership(self: *Self) AllocError!Slice {
             const old_memory = self.allocated_slice();
             if (alloc.resize(old_memory, self.items.len)) |_| {
                 const result = self.items;
-                self.* = Self.new();
+                self.* = Self.create();
                 return result;
             }
 
@@ -84,9 +101,10 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             return new_memory;
         }
 
-        /// The caller owns the returned memory. Empties this StaticBlockAllocList.
-        pub fn hand_over_ownership_sentinel(self: *Self, comptime sentinel: T) Allocator.Error!SentinelSlice(sentinel) {
-            // This addition can never overflow because `self.items` can never occupy the whole address space
+        /// The caller takes ownership of the slice and is responsible for freeing its memory when done
+        ///
+        /// This list is empty and re-usable afterwards
+        pub fn hand_over_ownership_sentinel(self: *Self, comptime sentinel: T) AllocError!SentinelSlice(sentinel) {
             try self.ensure_capacity_exact(self.items.len + 1);
             self.append_assume_capacity(sentinel);
             const result = try self.hand_over_ownership();
@@ -94,8 +112,8 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         }
 
         /// Creates a copy of this StaticBlockAllocList, using the same allocator.
-        pub fn clone(self: Self) Allocator.Error!Self {
-            var cloned = try Self.new_with_capacity(self.capacity);
+        pub fn clone(self: Self) AllocError!Self {
+            var cloned = try Self.create_with_capacity(self.capacity);
             cloned.append_slice_assume_capacity(self.items);
             return cloned;
         }
@@ -105,7 +123,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// This operation is O(N).
         /// Invalidates element pointers if additional memory is needed.
         /// Asserts that the index is in bounds or equal to the length.
-        pub fn insert(self: *Self, i: usize, item: T) Allocator.Error!void {
+        pub fn insert(self: *Self, i: usize, item: T) AllocError!void {
             const dst = try self.add_many_slots_at(i, 1);
             dst[0] = item;
         }
@@ -132,7 +150,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// Invalidates all pre-existing element pointers if capacity must be
         /// increased to accomodate the new elements.
         /// Asserts that the index is in bounds or equal to the length.
-        pub fn add_many_slots_at(self: *Self, index: usize, count: usize) Allocator.Error![]T {
+        pub fn add_many_slots_at(self: *Self, index: usize, count: usize) AllocError![]T {
             const new_len = try add_or_error(self.items.len, count);
 
             if (self.capacity >= new_len)
@@ -192,7 +210,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             self: *Self,
             index: usize,
             items: []const T,
-        ) Allocator.Error!void {
+        ) AllocError!void {
             const dst = try self.add_many_slots_at(index, items.len);
             @memcpy(dst, items);
         }
@@ -201,7 +219,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         // /// Grows or shrinks the list as necessary.
         // /// Invalidates element pointers if additional capacity is allocated.
         // /// Asserts that the range is in bounds.
-        // pub fn replace_range(self: *Self, start: usize, len: usize, new_items: []const T) Allocator.Error!void {
+        // pub fn replace_range(self: *Self, start: usize, len: usize, new_items: []const T) AllocError!void {
         //     var unmanaged = self.moveToUnmanaged();
         //     defer self.* = unmanaged.toManaged(self.allocator);
         //     return unmanaged.replaceRange(self.allocator, start, len, new_items);
@@ -219,7 +237,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
 
         /// Extends the list by 1 element. Allocates more memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn append(self: *Self, item: T) Allocator.Error!void {
+        pub fn append(self: *Self, item: T) AllocError!void {
             const new_item_ptr = try self.add_one_slot();
             new_item_ptr.* = item;
         }
@@ -263,7 +281,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// Append the slice of items to the list. Allocates more
         /// memory as necessary.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn append_slice(self: *Self, items: []const T) Allocator.Error!void {
+        pub fn append_slice(self: *Self, items: []const T) AllocError!void {
             try self.ensure_unused_capacity(items.len);
             self.append_slice_assume_capacity(items);
         }
@@ -283,7 +301,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// memory as necessary. Only call this function if calling
         /// `appendSlice` instead would be a compile error.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn append_unaligned_slice(self: *Self, items: []align(1) const T) Allocator.Error!void {
+        pub fn append_unaligned_slice(self: *Self, items: []align(1) const T) AllocError!void {
             try self.ensure_unused_capacity(items.len);
             self.append_unaligned_slice_assume_capacity(items);
         }
@@ -306,7 +324,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
             @compileError("The Writer interface is only defined for an element type of u8 " ++
                 "but the element type of this List is " ++ @typeName(T))
         else
-            std.io.Writer(*Self, Allocator.Error, append_write);
+            std.io.Writer(*Self, AllocError, append_write);
 
         /// Initializes a Writer which will append to the list.
         pub fn writer(self: *Self) Writer {
@@ -316,7 +334,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// Same as `append` except it returns the number of bytes written, which is always the same
         /// as `m.len`. The purpose of this function existing is to match `std.io.Writer` API.
         /// Invalidates element pointers if additional memory is needed.
-        fn append_write(self: *Self, m: []const u8) Allocator.Error!usize {
+        fn append_write(self: *Self, m: []const u8) AllocError!usize {
             try self.append_slice(m);
             return m.len;
         }
@@ -326,7 +344,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// Invalidates element pointers if additional memory is needed.
         /// The function is inline so that a comptime-known `value` parameter will
         /// have a more optimal memset codegen in case it has a repeated byte pattern.
-        pub inline fn append_n_times(self: *Self, value: T, n: usize) Allocator.Error!void {
+        pub inline fn append_n_times(self: *Self, value: T, n: usize) AllocError!void {
             const old_len = self.items.len;
             try self.resize(try add_or_error(old_len, n));
             @memset(self.items[old_len..self.items.len], value);
@@ -347,7 +365,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// Adjust the list length to `new_len`.
         /// Additional elements contain the value `undefined`.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn resize(self: *Self, new_len: usize) Allocator.Error!void {
+        pub fn resize(self: *Self, new_len: usize) AllocError!void {
             try self.ensure_capacity(new_len);
             self.items.len = new_len;
         }
@@ -385,7 +403,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// If the current capacity is less than `new_capacity`, this function will
         /// modify the array so that it can hold at least `new_capacity` items.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn ensure_capacity(self: *Self, new_capacity: usize) Allocator.Error!void {
+        pub fn ensure_capacity(self: *Self, new_capacity: usize) AllocError!void {
             if (@sizeOf(T) == 0) {
                 self.capacity = math.maxInt(usize);
                 return;
@@ -399,7 +417,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// If the current capacity is less than `new_capacity`, this function will
         /// modify the array so that it can hold exactly `new_capacity` items.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn ensure_capacity_exact(self: *Self, new_capacity: usize) Allocator.Error!void {
+        pub fn ensure_capacity_exact(self: *Self, new_capacity: usize) AllocError!void {
             if (@sizeOf(T) == 0) {
                 self.capacity = math.maxInt(usize);
                 return;
@@ -426,7 +444,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
 
         /// Modify the array so that it can hold at least `additional_count` **more** items.
         /// Invalidates element pointers if additional memory is needed.
-        pub fn ensure_unused_capacity(self: *Self, additional_count: usize) Allocator.Error!void {
+        pub fn ensure_unused_capacity(self: *Self, additional_count: usize) AllocError!void {
             return self.ensure_capacity(try add_or_error(self.items.len, additional_count));
         }
 
@@ -439,7 +457,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
 
         /// Increase length by 1, returning pointer to the new item.
         /// The returned pointer becomes invalid when the list resized.
-        pub fn add_one_slot(self: *Self) Allocator.Error!*T {
+        pub fn add_one_slot(self: *Self) AllocError!*T {
             // This can never overflow because `self.items` can never occupy the whole address space
             const newlen = self.items.len + 1;
             try self.ensure_capacity(newlen);
@@ -460,7 +478,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// The return value is an array pointing to the newly allocated elements.
         /// The returned pointer becomes invalid when the list is resized.
         /// Resizes list if `self.capacity` is not large enough.
-        pub fn add_many_slots_array_ptr(self: *Self, comptime n: usize) Allocator.Error!*[n]T {
+        pub fn add_many_slots_array_ptr(self: *Self, comptime n: usize) AllocError!*[n]T {
             const prev_len = self.items.len;
             try self.resize(try add_or_error(self.items.len, n));
             return self.items[prev_len..][0..n];
@@ -482,7 +500,7 @@ pub fn define_with_alignment(comptime T: type, comptime alignment: ?u29, comptim
         /// The return value is a slice pointing to the newly allocated elements.
         /// The returned pointer becomes invalid when the list is resized.
         /// Resizes list if `self.capacity` is not large enough.
-        pub fn add_many_slots_slice_ptr(self: *Self, n: usize) Allocator.Error![]T {
+        pub fn add_many_slots_slice_ptr(self: *Self, n: usize) AllocError![]T {
             const prev_len = self.items.len;
             try self.resize(try add_or_error(self.items.len, n));
             return self.items[prev_len..][0..n];

@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const AllocError = std.mem.Allocator.Error;
+pub const AllocError = std.mem.Allocator.Error;
 const builtin = @import("builtin");
 const mem = std.mem;
 const math = std.math;
