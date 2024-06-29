@@ -4,6 +4,7 @@ const math = std.math;
 const assert = std.debug.assert;
 const BlockAllocator = @import("./BlockAllocator.zig");
 const AllocError = BlockAllocator.AllocError;
+const StaticAllocListBuilder = @import("./StaticAllocList.zig");
 
 pub inline fn define(comptime T: type, comptime allocator_ptr: *BlockAllocator) type {
     return define_with_sentinel_and_align(T, null, null, allocator_ptr);
@@ -24,20 +25,25 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         }
     }
 
-    const aa = if (alignment) |a| a else @alignOf(T);
-    if (aa < @alignOf(T)) @compileError("specified alignment is smaller than @alignOf(T)");
+    const const_align = if (alignment) |a| a else @alignOf(T);
+    if (const_align < @alignOf(T)) @compileError("specified alignment is smaller than @alignOf(T)");
 
     return struct {
         const Self = @This();
         pub const alloc: *BlockAllocator = allocator_ptr;
-        const ALIGN: u29 = aa;
+        const ALIGN: u29 = const_align;
         const LOG2_OF_ALIGN: u8 = @as(u8, math.log2_int(u29, ALIGN));
         const BLANK_ARRAY align(ALIGN) = if (sentinel) [0:sentinel]T{} else [0]T{};
-        const BLANK_PTR: Ptr = @alignCast(&BLANK_ARRAY);
+        const BLANK_PTR: PtrType = @alignCast(&BLANK_ARRAY);
+        const BLANK = Self{
+            .ptr = BLANK_PTR,
+            .len = 0,
+        };
 
-        ptr: Ptr,
+        ptr: PtrType,
         len: usize,
 
+        const StaticAllocList = StaticAllocListBuilder.define_with_sentinel_and_align(T, sentinel, alignment, allocator_ptr);
         pub const SliceType = eval: {
             if (alignment) |a| {
                 if (sentinel) |s| {
@@ -53,7 +59,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 }
             }
         };
-        const Ptr = eval: {
+        pub const PtrType = eval: {
             if (alignment) |a| {
                 break :eval [*]align(a) T;
             } else {
@@ -74,6 +80,44 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 break :eval []u8;
             }
         };
+
+        /// Turn this StaticAllocSlice into its matching StaticAllocList type
+        ///
+        /// Slice => List
+        /// - `.ptr` => `.ptr`
+        /// - `.len` => `.len`
+        /// - `.len` => `.cap`
+        ///
+        /// This operation sets this slice to an empty state
+        pub fn upgrade_into_list(self: *Self) StaticAllocList {
+            const list = StaticAllocList{
+                .ptr = self.ptr,
+                .cap = self.len,
+                .len = self.len,
+            };
+            self.* = BLANK;
+            return list;
+        }
+
+        /// Turn this StaticAllocSlice into its matching StaticAllocList type
+        ///
+        /// Useful if you know some portion of this slice has undefined values
+        ///
+        /// Slice => List
+        /// - `.ptr`     => `.ptr`
+        /// - `list_len` => `.len`
+        /// - `.len`     => `.cap`
+        ///
+        /// This operation sets this slice to an empty state
+        pub fn upgrade_into_list_partial(self: *Self, list_len: usize) StaticAllocList {
+            const list = StaticAllocList{
+                .ptr = self.ptr,
+                .cap = self.len,
+                .len = list_len,
+            };
+            self.* = BLANK;
+            return list;
+        }
 
         /// Creates a new slice using the type-defined allocator with a length equal-to
         /// or greater-than the minimum requested
@@ -151,7 +195,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         /// Returns `false` if existing memory pointers were invalidated (underlying memory reallocated),
         /// else `true` if existing memory pointers are still valid (no memory move)
         pub fn resize_exact(self: *Self, exact_len: usize) AllocError!bool {
-            const resize_result = try self.resize_at_least(exact_len);
+            const resize_result = try self.resize_minimum(exact_len);
             self.len = exact_len;
             if (sentinel) |s| {
                 self.ptr[self.len] = s;
@@ -233,7 +277,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         }
 
         inline fn from_alloc_mem(alloc_slice: AllocSlice) Self {
-            const type_ptr: Ptr = @ptrCast(@alignCast(alloc_slice.ptr));
+            const type_ptr: PtrType = @ptrCast(@alignCast(alloc_slice.ptr));
             return Self{
                 .items = type_ptr[0..len_from_alloc_len(alloc_slice.len)],
             };

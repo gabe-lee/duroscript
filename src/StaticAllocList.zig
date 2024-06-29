@@ -4,6 +4,7 @@ const math = std.math;
 const assert = std.debug.assert;
 const BlockAllocator = @import("./BlockAllocator.zig");
 const AllocError = BlockAllocator.AllocError;
+const StaticAllocSliceBuilder = @import("./StaticAllocSlice.zig");
 
 pub inline fn define(comptime T: type, comptime allocator_ptr: *BlockAllocator) type {
     return define_with_sentinel_and_align(T, null, null, allocator_ptr);
@@ -24,14 +25,28 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         }
     }
 
+    const const_align = if (alignment) |a| a else @alignOf(T);
+    if (const_align < @alignOf(T)) @compileError("specified alignment is smaller than @alignOf(T)");
+
     return struct {
         const Self = @This();
         pub const alloc: *BlockAllocator = allocator_ptr;
+        const ALIGN: u29 = const_align;
+        const LOG2_OF_ALIGN: u8 = @as(u8, math.log2_int(u29, ALIGN));
+        const BLANK_ARRAY align(ALIGN) = if (sentinel) [0:sentinel]T{} else [0]T{};
+        const BLANK_PTR: PtrType = @alignCast(&BLANK_ARRAY);
+        const BLANK = Self{
+            .ptr = BLANK_PTR,
+            .len = 0,
+            .cap = 0,
+        };
 
-        items: Slice,
-        capacity: usize,
+        ptr: PtrType,
+        len: usize,
+        cap: usize,
 
-        pub const Slice = eval: {
+        const StaticAllocSlice = StaticAllocSliceBuilder.define_with_sentinel_and_align(T, sentinel, alignment, allocator_ptr);
+        pub const SliceType = eval: {
             if (alignment) |a| {
                 if (sentinel) |s| {
                     break :eval [:s]align(a) T;
@@ -46,77 +61,123 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 }
             }
         };
+        pub const PtrType = eval: {
+            if (alignment) |a| {
+                break :eval [*]align(a) T;
+            } else {
+                break :eval [*]T;
+            }
+        };
+        const AllocPtr = eval: {
+            if (alignment) |a| {
+                break :eval [*]align(a) u8;
+            } else {
+                break :eval [*]u8;
+            }
+        };
+        const AllocSlice = eval: {
+            if (alignment) |a| {
+                break :eval []align(a) u8;
+            } else {
+                break :eval []u8;
+            }
+        };
 
-        pub fn create() Self {
-            return Self{
-                .items = &[_]T{},
-                .capacity = 0,
+        /// Create a new StaticAllocList in an un-allocated state
+        pub inline fn create() Self {
+            return Self.BLANK;
+        }
+
+        /// Create a new StaticAllocList with at least `min_cap` capacity, possibly more
+        pub fn create_with_capacity(min_cap: usize) AllocError!Self {
+            if (min_cap == 0) {
+                return Self.BLANK;
+            }
+            const slice = try StaticAllocSlice.create_minimum(min_cap);
+            return slice.upgrade_into_list_partial(0);
+        }
+
+        /// Releases the memory using the type-defined allocator, invalidating any element pointers
+        ///
+        /// Does nothing if `cap == 0` or the pointer references the type-defined const zero-length array
+        ///
+        /// The list struct can still be re-used by adding new elements to it, which will begin a new allocation
+        pub fn release(self: Self) void {
+            var slice = self.downgrade_into_slice();
+            slice.release();
+        }
+
+        /// Turn this StaticAllocList into its matching StaticAllocSlice type
+        ///
+        /// Caller assumes responsibility for dealing with undefined values
+        /// located between len and cap
+        ///
+        /// List => Slice
+        /// - `.ptr` => `.ptr`
+        /// - `.len` =>  ----------
+        /// - `.cap` => `.len`
+        ///
+        /// This operation sets this slice to an empty state
+        pub fn downgrade_into_slice(self: *Self) StaticAllocSlice {
+            const slice = StaticAllocSlice{
+                .ptr = self.ptr,
+                .len = self.cap,
             };
+            self.* = BLANK;
+            return slice;
         }
 
-        pub fn create_with_capacity(num: usize) AllocError!Self {
-            var self = Self.create();
-            try self.ensure_capacity_exact(num);
-            return self;
+        /// Same as `downgrade_into_slice()` but does not erase this list's pointer or size
+        ///
+        /// Unsafe is misused
+        fn to_quick_slice(self: *Self) StaticAllocSlice {
+            const slice = StaticAllocSlice{
+                .ptr = self.ptr,
+                .len = self.cap,
+            };
+            return slice;
         }
 
-        pub fn destroy(self: Self) void {
-            if (@sizeOf(T) > 0) {
-                alloc.free(self.allocated_slice());
+        /// Same as `upgrade_from_slice_partial()` but does not erase that slice's pointer or size
+        ///
+        /// Unsafe is misused
+        fn from_quick_slice(self: *Self, slice: StaticAllocSlice) void {
+            self.ptr = slice.ptr;
+            self.cap = slice.len;
+            if (self.len > self.cap) {
+                self.len = self.cap;
             }
         }
 
-        /// List takes ownership of the passed in slice. The slice must have been
-        /// allocated with `allocator`
-        pub fn take_ownership_of(slice: Slice) Self {
-            return Self{
-                .items = slice,
-                .capacity = slice.len,
-            };
-        }
-
-        /// List takes ownership of the passed in slice. The slice must have been
-        /// allocated with `allocator`.
-        pub fn take_ownership_of_sentinel(comptime sentinel: T, slice: SentinelSlice(sentinel)) Self {
-            return Self{
-                .items = slice,
-                .capacity = slice.len + 1,
-            };
-        }
-
-        /// The caller takes ownership of the slice and is responsible for freeing its memory when done
+        /// Turn this StaticAllocList into its matching StaticAllocSlice type
         ///
-        /// This list is empty and re-usable afterwards
-        pub fn hand_over_ownership(self: *Self) AllocError!Slice {
-            const old_memory = self.allocated_slice();
-            if (alloc.resize(old_memory, self.items.len)) |_| {
-                const result = self.items;
-                self.* = Self.create();
-                return result;
-            }
-
-            const new_memory = try alloc.alloc_with_align(T, alignment, self.items.len);
-            @memcpy(new_memory, self.items);
-            self.clear_and_free();
-            return new_memory;
-        }
-
-        /// The caller takes ownership of the slice and is responsible for freeing its memory when done
+        /// Resizes resulting slice to only have indexes below `.len`,
+        /// possibly invalidating pointers to its memory or elements
         ///
-        /// This list is empty and re-usable afterwards
-        pub fn hand_over_ownership_sentinel(self: *Self, comptime sentinel: T) AllocError!SentinelSlice(sentinel) {
-            try self.ensure_capacity_exact(self.items.len + 1);
-            self.append_assume_capacity(sentinel);
-            const result = try self.hand_over_ownership();
-            return result[0 .. result.len - 1 :sentinel];
+        /// List => Slice
+        /// - `.ptr` => `.ptr`
+        /// - `.len` => `.len`
+        /// - `.cap` =>  ----------
+        ///
+        /// This operation sets this slice to an empty state
+        pub fn downgrade_into_slice_partial(self: *Self) AllocError!StaticAllocSlice {
+            const list = StaticAllocSlice{
+                .ptr = self.ptr,
+                .len = self.cap,
+            };
+            self.* = BLANK;
+            list.resize_exact(self.len);
+            return list;
         }
 
-        /// Creates a copy of this StaticBlockAllocList, using the same allocator.
+        /// Creates a new list referencing new memory that holds all the same values as the this one
         pub fn clone(self: Self) AllocError!Self {
-            var cloned = try Self.create_with_capacity(self.capacity);
-            cloned.append_slice_assume_capacity(self.items);
-            return cloned;
+            const new_slice = try StaticAllocSlice.create_exact(self.cap);
+            @memcpy(new_slice.ptr[0..self.len], self.ptr[0..self.len]);
+            return new_slice.upgrade_into_list_partial(self.len);
         }
+
+        //CHECKPOINT Fix below functions with new API
 
         /// Insert `item` at index `i`. Moves `list[i .. list.len]` to higher indices to make room.
         /// If `i` is equal to the length of the list this operation is equivalent to append.
@@ -533,13 +594,6 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         pub fn pop_or_null(self: *Self) ?T {
             if (self.items.len == 0) return null;
             return self.pop();
-        }
-
-        /// Returns a slice of all the items plus the extra capacity, whose memory
-        /// contents are `undefined`.
-        pub fn allocated_slice(self: Self) Slice {
-            // `items.len` is the length, not the capacity.
-            return self.items.ptr[0..self.capacity];
         }
 
         /// Returns a slice of only the extra capacity after items.
