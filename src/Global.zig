@@ -106,3 +106,16 @@ pub fn cleanup(self: *Self) void {
 pub const U8BufSmall = StaticAllocBuffer.define(u8, &g.small_block_alloc);
 pub const U8BufMedium = StaticAllocBuffer.define(u8, &g.medium_block_alloc);
 pub const U8BufLarge = StaticAllocBuffer.define(u8, &g.large_block_alloc);
+
+
+pub const BufLoc = struct {
+    start: u32,
+    end: u32,
+
+    pub inline fn new(start: u32, end: u32) BufLoc {
+        return BufLoc{
+            .start = start,
+            .end = end,
+        };
+    }
+};

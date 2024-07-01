@@ -7,6 +7,10 @@ const SourceReader = @import("./SourceReader.zig");
 const IdentManager = @import("./IdentManager.zig");
 const Allocator = std.mem.Allocator;
 const List = std.ArrayListUnmanaged;
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
+
+pub const TokenBuf = StaticAllocBuffer.define(Self, &Global.g.medium_block_alloc);
 
 const Self = @This();
 

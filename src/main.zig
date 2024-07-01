@@ -39,7 +39,7 @@ pub fn main() !void {
 
 test "lexer output" {
     //CHECKPOINT init and implement source manager
-    Global.g = Global.init(std.haep.page_allocator);
+    Global.g = Global.init(std.heap.page_allocator);
     defer Global.g.cleanup();
     const large_alloc = Global.g.large_alloc;
     const medium_alloc = Global.g.medium_alloc;

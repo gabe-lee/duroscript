@@ -29,13 +29,13 @@ const ParsingAllocator = @import("./ParsingAllocator.zig");
 
 const Self = @This();
 
-arena: ArenaState,
 reader: SourceReader,
-token_list: List(Token),
+token_list: Token.TokenBuf.List,
 
 pub fn new(source: []const u8, source_key: u16) Self {
     return Self{
         .reader = SourceReader.new(source_key, source),
+        .token_list = Token.TokenBuf.List.create(),
     };
 }
 

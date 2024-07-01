@@ -2,109 +2,119 @@ const std = @import("std");
 const assert = std.debug.assert;
 const APPEND_PANIC_MSG = @import("./Constants.zig").APPEND_PANIC_MSG;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-const ArenaState = ArenaAllocator.State;
-const ArenaResetMode = ArenaAllocator.ResetMode;
 const SourceLexer = @import("./SourceLexer.zig");
-const List = std.ArrayListUnmanaged;
 const IdentBlock = @import("./IdentBlock.zig");
 const Token = @import("./Token.zig");
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
+const BufLoc = Global.BufLoc;
+
+const PathLocBuf = StaticAllocBuffer.define(BufLoc, &Global.g.medium_block_alloc);
+const SourceStageBuf = StaticAllocBuffer.define(SourceStage, &Global.g.medium_block_alloc);
+const TokenBuf = StaticAllocBuffer.define(Token, &Global.g.small_block_alloc);
 
 const Self = @This();
 
-pub var global: Self = undefined;
+//CHECKPOINT Fix this and any other *Manager classes for new BlockAllocator + StaticAllocBuffer API
 
-alloc: Allocator,
-path_list: List([]const u8),
-data_list: List(SourceData),
+path_pool: Global.U8BufMedium.List,
+path_list: PathLocBuf.List,
+stage_list: SourceStageBuf.List,
+
+// pub fn get_source_key(self: *Self, complete_path: []const u8) u16 {
+//     assert(complete_path.len > 0);
+//     check_existing: for (self.path_list.items, 0..) |src, idx| {
+//         if (src.len != complete_path.len) continue :check_existing;
+//         var i = src.len - 1;
+//         while (true) {
+//             if (src[i] != complete_path[i]) continue :check_existing;
+//             if (i == 0) return idx;
+//             i -= 1;
+//         }
+//     }
+//     assert(self.path_list.items.len <= std.math.maxInt(u16));
+//     const new_idx: u16 = @truncate(self.path_list.items.len);
+//     self.path_list.append(self.alloc, complete_path) catch @panic(APPEND_PANIC_MSG);
+//     return new_idx;
+// }
 
 pub const STATE = enum(u8) {
-    UNOPENED,
-    LOADED,
-    LEXED,
-    PARSED,
-    BYTECODE,
+    UNOPENED = 0,
+    LOADED = 1,
+    LEXED = 2,
+    PARSED = 3,
+    BYTECODE = 4,
 };
 
-pub const SourceDataStaticUnion = union(STATE) {
-    UNOPENED: void,
-    LOADED: []const u8,
-    LEXED: []const Token,
+pub const SourceStage = union(STATE) {
+    UNOPENED: struct {
+        file_path_loc: BufLoc,
+        file_reader: Global.U8BufLarge.List,
+    },
+    LOADED: struct {
+        source: Global.U8BufLarge.Slice,
+        source_lexer: SourceLexer,
+    },
+    LEXED: struct {
+        token_list: TokenBuf.Slice,
+        //TODO AST
+    },
     PARSED: void, // TODO
     BYTECODE: void, // TODO
-};
 
-pub const SourceDataWorkingUnion = union(STATE) {
-    UNOPENED: void,
-    LOADED: List(u8),
-    LEXED: SourceLexer,
-    PARSED: void, // TODO
-    CRUNCHED: void, // TODO
-
-    pub fn make_static(self: SourceDataWorkingUnion) SourceDataStaticUnion {
-        return switch (self) {
-            .UNOPENED => SourceDataStaticUnion{ .UNOPENED = void{} },
-            .LOADED => |list| SourceDataStaticUnion{ .LOADED = list.items },
-            .LEXED => |lexer| SourceDataStaticUnion{ .LEXED = lexer.token_list.items },
-            .PARSED => SourceDataStaticUnion{ .PARSED = void{} }, // TODO
-            .BYTECODE => SourceDataStaticUnion{ .BYTECODE = void{} }, // TODO
-        };
-    }
-};
-
-//CHECKPOINT Fix this and any other *Manager classes for new BlockAllocator + StaticAllocBuffer API
-pub const SourceData = struct {
-    arenas: [2]ArenaState = [2]ArenaState{ ArenaState{}, ArenaState{} },
-    arena_static: usize = 0,
-    arena_working: usize = 1,
-    data_static: SourceDataStaticUnion = SourceDataStaticUnion{ .UNOPENED = void{} },
-    data_working: SourceDataWorkingUnion = SourceDataWorkingUnion{ .UNOPENED = void{} },
-
-    pub fn cleanup(self: *SourceData) void {
-        self.arenas[0].promote(global.alloc).reset(ArenaResetMode.free_all);
-        self.arenas[1].promote(global.alloc).reset(ArenaResetMode.free_all);
-        self.data_static = SourceDataStaticUnion{ .UNOPENED = void{} };
+    pub fn new(file_path_loc: BufLoc) SourceStage {
+        return SourceStage{ .UNOPENED = .{
+            .file_path_loc = file_path_loc,
+            .file_reader = Global.U8BufLarge.List.create(),
+        } };
     }
 
-    pub fn reset_working_allocation(self: *SourceData) void {
-        self.arenas[self.arena_working].promote(global.alloc).reset(ArenaResetMode.retain_capacity);
-    }
-
-    pub inline fn swap_arenas(self: *SourceData) void {
-        self.arena_static = self.arena_working ^ self.arena_static;
-        self.arena_working = self.arena_static ^ self.arena_working;
-        self.arena_static = self.arena_working ^ self.arena_static;
-    }
-};
-
-pub fn new(alloc: Allocator) Self {
-    return Self{
-        .alloc = alloc,
-        .path_list = List([]const u8){},
-    };
-}
-
-pub fn cleanup(self: *Self) void {
-    self.path_list.deinit(self.alloc);
-    return;
-}
-
-pub fn get_source_key(self: *Self, complete_path: []const u8) u16 {
-    assert(complete_path.len > 0);
-    check_existing: for (self.path_list.items, 0..) |src, idx| {
-        if (src.len != complete_path.len) continue :check_existing;
-        var i = src.len - 1;
-        while (true) {
-            if (src[i] != complete_path[i]) continue :check_existing;
-            if (i == 0) return idx;
-            i -= 1;
+    pub fn cleanup(self: SourceStage) void {
+        switch (self) {
+            .UNOPENED => |stage| {
+                stage.file_reader.release();
+            },
+            .LOADED => |stage| {
+                stage.source.release();
+                stage.source_lexer.token_list.release();
+            },
+            .LEXED => |stage| {
+                stage.token_list.release();
+                // release ast builder
+            },
+            .PARSED => |_| {
+                // release ast
+                // release bytecode builder
+            },
+            .BYTECODE => |_| {
+                // release bytecode buffer
+            },
         }
     }
-    assert(self.path_list.items.len <= std.math.maxInt(u16));
-    const new_idx: u16 = @truncate(self.path_list.items.len);
-    self.path_list.append(self.alloc, complete_path) catch @panic(APPEND_PANIC_MSG);
-    return new_idx;
-}
 
-//CHECKPOINT
-// pub fn load_file(self: *Self, source_key: u16) []const u8 {}
+    pub fn advance_to_loaded(self: *SourceStage) void {
+        if (@intFromEnum(self) >= @intFromEnum(STATE.LOADED)) return;
+        // Do load process
+    }
+
+    pub fn advance_to_lexed(self: *SourceStage) void {
+        if (@intFromEnum(self) >= @intFromEnum(STATE.LEXED)) return;
+        self.advance_to_loaded();
+        // Do lexing process
+    }
+
+    pub fn advance_to_parsed(self: *SourceStage) void {
+        if (@intFromEnum(self) >= @intFromEnum(STATE.PARSED)) return;
+        self.advance_to_loaded();
+        self.advance_to_lexed();
+        // Do ast parsing process
+    }
+
+    pub fn advance_to_bytecode(self: *SourceStage) void {
+        if (@intFromEnum(self) >= @intFromEnum(STATE.BYTECODE)) return;
+        self.advance_to_loaded();
+        self.advance_to_lexed();
+        self.advance_to_parsed();
+        // Do bytcode generation process
+    }
+};
