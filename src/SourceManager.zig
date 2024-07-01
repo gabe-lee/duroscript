@@ -23,7 +23,7 @@ pub const STATE = enum(u8) {
     LOADED,
     LEXED,
     PARSED,
-    CRUNCHED,
+    BYTECODE,
 };
 
 pub const SourceDataStaticUnion = union(STATE) {
@@ -31,7 +31,7 @@ pub const SourceDataStaticUnion = union(STATE) {
     LOADED: []const u8,
     LEXED: []const Token,
     PARSED: void, // TODO
-    CRUNCHED: void, // TODO
+    BYTECODE: void, // TODO
 };
 
 pub const SourceDataWorkingUnion = union(STATE) {
@@ -47,11 +47,12 @@ pub const SourceDataWorkingUnion = union(STATE) {
             .LOADED => |list| SourceDataStaticUnion{ .LOADED = list.items },
             .LEXED => |lexer| SourceDataStaticUnion{ .LEXED = lexer.token_list.items },
             .PARSED => SourceDataStaticUnion{ .PARSED = void{} }, // TODO
-            .CRUNCHED => SourceDataStaticUnion{ .CRUNCHED = void{} }, // TODO
+            .BYTECODE => SourceDataStaticUnion{ .BYTECODE = void{} }, // TODO
         };
     }
 };
 
+//CHECKPOINT Fix this and any other *Manager classes for new BlockAllocator + StaticAllocBuffer API
 pub const SourceData = struct {
     arenas: [2]ArenaState = [2]ArenaState{ ArenaState{}, ArenaState{} },
     arena_static: usize = 0,

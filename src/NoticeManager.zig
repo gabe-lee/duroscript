@@ -1,37 +1,35 @@
 const std = @import("std");
-const Arena = std.heap.ArenaAllocator;
-const List = std.ArrayListUnmanaged;
 const SourceRange = @import("./SourceReader.zig").SourceRange;
-const Allocator = std.mem.Allocator;
 const ANSI = @import("./ANSI.zig");
 const ASC = @import("./Unicode.zig").ASCII;
 const SourceReader = @import("./SourceReader.zig");
 const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
 
 const Self = @This();
+const NoticeBuf = StaticAllocBuffer.define(Notice, &Global.g.small_block_alloc);
 
-alloc: Allocator,
-notice_list: List(Notice),
+notice_list: NoticeBuf.List,
 panic_count: usize = 0,
 error_count: usize = 0,
 warn_count: usize = 0,
 hint_count: usize = 0,
 info_count: usize = 0,
 
-pub fn new(alloc: Allocator) Self {
+pub fn new() Self {
     return Self{
-        .alloc = alloc,
-        .notice_list = List(Notice){},
+        .notice_list = NoticeBuf.List.create(),
     };
 }
 
 pub fn cleanup(self: *Self) void {
-    self.notice_list.deinit(self.alloc);
+    self.notice_list.release();
 }
 
 pub fn add_notice(self: *Self, notice: Notice) void {
     @setCold(true);
-    var idx = self.notice_list.items.len;
+    var idx = undefined;
     switch (notice.severity) {
         SEVERITY.PANIC => {
             idx = self.panic_count;
@@ -50,117 +48,93 @@ pub fn add_notice(self: *Self, notice: Notice) void {
             self.hint_count += 1;
         },
         SEVERITY.INFO => {
-            idx = self.panic_count + self.error_count + self.warn_count + self.hint_count + self.info_count;
+            idx = self.notice_list.len;
             self.info_count += 1;
         },
     }
-    self.notice_list.insert(self.alloc, idx, notice) catch @panic("FAILED TO INSERT NEW ERROR INTO ERROR LIST (MEM ALLOCATION ERROR)");
+    self.notice_list.insert(idx, notice);
     if (notice.severity == SEVERITY.PANIC) @panic("DUROSCRIPT ENCOUNTERED AN ERROR THAT CANNOT BE RECOVERED FROM");
     return;
 }
 
 pub fn log_all_notices(self: *Self) void {
     @setCold(true);
-    var buf = List(u8).initCapacity(self.alloc, 1000) catch return;
-    const count_line = self._get_count_line(false);
-    buf.append(self.alloc, ASC.NEWLINE);
-    buf.appendSlice(self.alloc, count_line);
-    buf.append(self.alloc, ASC.NEWLINE);
-    for (self.notice_list.items, 0..) |notice, idx| {
+    var list = Global.U8BufMedium.List.create();
+    defer list.release();
+    const count_line = self.get_count_line();
+    defer count_line.release();
+    list.append(ASC.NEWLINE);
+    list.append_slice(count_line.slice());
+    list.append(ASC.NEWLINE);
+    for (self.notice_list.slice(), 0..) |notice, idx| {
         if (idx < self.error_count) {
-            buf.appendSlice(self.alloc, ANSI.LOG_PANIC);
-            buf.appendSlice(self.alloc, PANIC_HEADER);
+            list.append_slice(ANSI.LOG_PANIC);
+            list.append_slice(PANIC_HEADER);
         } else if (idx < self.warn_count) {
-            buf.appendSlice(self.alloc, ANSI.LOG_ERROR);
-            buf.appendSlice(self.alloc, ERROR_HEADER);
+            list.append_slice(ANSI.LOG_ERROR);
+            list.append_slice(ERROR_HEADER);
         } else if (idx < self.hint_count) {
-            buf.appendSlice(self.alloc, ANSI.LOG_WARN);
-            buf.appendSlice(self.alloc, WARN_HEADER);
+            list.append_slice(ANSI.LOG_WARN);
+            list.append_slice(WARN_HEADER);
         } else if (idx < self.info_count) {
-            buf.appendSlice(self.alloc, ANSI.LOG_HINT);
-            buf.appendSlice(self.alloc, HINT_HEADER);
+            list.append_slice(ANSI.LOG_HINT);
+            list.append_slice(HINT_HEADER);
         } else {
-            buf.appendSlice(self.alloc, ANSI.LOG_INFO);
-            buf.appendSlice(self.alloc, INFO_HEADER);
+            list.append_slice(ANSI.LOG_INFO);
+            list.append_slice(INFO_HEADER);
         }
-        buf.appendSlice(self.alloc, notice.file);
-        buf.appendSlice(self.alloc, std.fmt.allocPrint(self.alloc, ":{d}:{d}\n", .{ notice.range.row_start, notice.range.col_start }) catch "\n");
-        buf.appendSlice(self.alloc, ANSI.RESET);
-        buf.appendSlice(self.alloc, NOTICE_MSG[@intFromEnum(notice.kind)]);
-        buf.append(self.alloc, ASC.NEWLINE);
+        list.append_slice(notice.file);
+        list.append_fmt_string(":{d}:{d}\n", .{ notice.range.row_start, notice.range.col_start });
+        list.append_slice(ANSI.RESET);
+        list.append_slice(NOTICE_MSG[@intFromEnum(notice.kind)]);
+        list.append(ASC.NEWLINE);
     }
-    buf.appendSlice(self.alloc, count_line);
-    self.alloc.free(count_line);
-    buf.append(self.alloc, ASC.NEWLINE);
+    list.append_slice(count_line.slice());
+    list.append(ASC.NEWLINE);
     var std_err = std.io.getStdErr();
-    std_err.writeAll(buf.items) catch {};
-    self.alloc.free(buf);
+    std_err.writeAll(list.slice()) catch {};
     return;
 }
 
-fn _get_count_line(self: *Self) []const u8 {
+fn get_count_line(self: *Self) Global.U8BufSmall.Slice {
     @setCold(true);
-    var count_line = List(u8).initCapacity(self.alloc, 100) catch return;
+    var count_line = Global.U8BufSmall.List.create();
     if (self.panic_count > 0) {
-        count_line.appendSlice(self.alloc, ANSI.LOG_PANIC);
-        count_line.appendSlice(self.alloc, "PANICS=1");
-        count_line.appendSlice(self.alloc, ANSI.RESET);
-        count_line.append(self.alloc, ASC.SPACE);
+        count_line.append_slice(ANSI.LOG_PANIC);
+        count_line.append_slice("PANICS=1");
+        count_line.append_slice(ANSI.RESET);
+        count_line.append(ASC.SPACE);
     }
     if (self.error_count > 0) {
-        count_line.appendSlice(self.alloc, ANSI.LOG_ERROR);
-        const error_count = std.fmt.allocPrint(self.alloc, "ERRORS={d} ", .{self.error_list.items.len});
-        if (error_count) |msg| {
-            count_line.appendSlice(self.alloc, msg);
-            self.alloc.free(msg);
-        } else |_| {
-            count_line.appendSlice(self.alloc, "ERRORS=? ");
-        }
-        count_line.appendSlice(self.alloc, ANSI.RESET);
+        count_line.append_slice(ANSI.LOG_ERROR);
+        count_line.append_fmt_string("ERRORS={d} ", .{self.error_count});
+        count_line.append_slice(ANSI.RESET);
     }
     if (self.warn_count > 0) {
-        count_line.appendSlice(self.alloc, ANSI.LOG_WARN);
-        const warn_count = std.fmt.allocPrint(self.alloc, "WARNS={d} ", .{self.warn_list.items.len});
-        if (warn_count) |msg| {
-            count_line.appendSlice(self.alloc, msg);
-            self.alloc.free(msg);
-        } else |_| {
-            count_line.appendSlice(self.alloc, "WARNS=? ");
-        }
-        count_line.appendSlice(self.alloc, ANSI.RESET);
+        count_line.append_slice(ANSI.LOG_WARN);
+        count_line.append_fmt_string("WARNS={d} ", .{self.warn_count});
+        count_line.append_slice(ANSI.RESET);
     }
     if (self.hint_count > 0) {
-        count_line.appendSlice(self.alloc, ANSI.LOG_HINT);
-        const hint_count = std.fmt.allocPrint(self.alloc, "HINTS={d} ", .{self.hint_list.items.len});
-        if (hint_count) |msg| {
-            count_line.appendSlice(self.alloc, msg);
-            self.alloc.free(msg);
-        } else |_| {
-            count_line.appendSlice(self.alloc, "HINTS=? ");
-        }
-        count_line.appendSlice(self.alloc, ANSI.RESET);
+        count_line.append_slice(ANSI.LOG_HINT);
+        count_line.append_fmt_string("HINTS={d} ", .{self.hint_count});
+        count_line.append_slice(ANSI.RESET);
     }
     if (self.info_count > 0) {
-        count_line.appendSlice(self.alloc, ANSI.LOG_HINT);
-        const info_count = std.fmt.allocPrint(self.alloc, "INFOS={d} ", .{self.info_list.items.len});
-        if (info_count) |msg| {
-            count_line.appendSlice(self.alloc, msg);
-            self.alloc.free(msg);
-        } else |_| {
-            count_line.appendSlice(self.alloc, "INFOS=? ");
-        }
-        count_line.appendSlice(self.alloc, ANSI.RESET);
+        count_line.append_slice(ANSI.LOG_HINT);
+        count_line.append_fmt_string("INFOS={d} ", .{self.info_count});
+        count_line.append_slice(ANSI.RESET);
     }
-    return count_line.items;
+    return count_line.downgrade_into_slice_partial();
 }
 
-pub fn get_notice_list_kinds(self: *Self) ![]const u8 {
-    var buf = try List(u8).initCapacity(self.alloc, 100);
-    for (self.notice_list.items) |notice| {
-        try buf.appendSlice(self.alloc, @typeInfo(KIND).Enum.fields[@intFromEnum(notice.kind)].name);
-        try buf.append(self.alloc, ASC.NEWLINE);
+pub fn get_notice_list_kinds(self: *Self) anyerror!Global.U8BufMedium.Slice {
+    var list = Global.U8BufMedium.List.create();
+    for (self.notice_list.slice()) |notice| {
+        try list.append_slice(@typeInfo(KIND).Enum.fields[@intFromEnum(notice.kind)].name);
+        try list.append(ASC.NEWLINE);
     }
-    return buf.items;
+    return list.downgrade_into_slice_partial();
 }
 
 pub const Notice = struct {

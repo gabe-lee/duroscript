@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 const DEBUG = std.debug.print;
 
 const Self = @This();
-
+//CHECKPOINT Fix this and any other *Manager classes for new BlockAllocator + StaticAllocBuffer API
 alloc: Allocator,
 ptr: [*]u8,
 len: usize,
