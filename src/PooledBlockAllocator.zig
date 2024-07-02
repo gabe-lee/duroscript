@@ -496,6 +496,10 @@ pub fn define(comptime config: Config) type {
             };
         }
 
+        inline fn block_size() usize {
+            return BLOCK_SIZE;
+        }
+
         /// Returns a `BlockAllocator` interface struct for this allocator
         pub fn block_allocator(self: *Self) BlockAllocator {
             return BlockAllocator{
@@ -504,6 +508,7 @@ pub fn define(comptime config: Config) type {
                     .alloc = raw_alloc,
                     .resize = raw_resize,
                     .free = raw_free,
+                    .block_size = block_size,
                 },
             };
         }

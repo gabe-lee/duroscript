@@ -54,6 +54,7 @@ interface: struct {
     /// allocation call stack. If the value is `0` it means no return address
     /// has been provided.
     free: *const fn (ctx: *anyopaque, old_mem: []u8, log2_of_align: u8, ret_addr: usize) void,
+    block_size: *const fn () usize,
 },
 
 /// Calls to this function must ensure all inputs are valid, bypasses saftey checks and optimizations
@@ -72,6 +73,13 @@ pub inline fn raw_resize(self: Self, old_mem: []u8, log2_of_align: u8, new_min_l
 /// at the interface level, though the concrete implementation may provide their own
 pub inline fn raw_free(self: Self, old_mem: []u8, log2_of_align: u8, ret_addr: usize) void {
     return self.interface.free(self.interface.self_opaque, old_mem, log2_of_align, ret_addr);
+}
+
+/// Returns the block size of this block allocator
+///
+/// (every allocation performed by a BlockAllocator is rounded up to a multiple of this size)
+pub inline fn block_size(self: Self) usize {
+    return self.interface.block_size();
 }
 
 /// Returns a pointer to undefined memory.

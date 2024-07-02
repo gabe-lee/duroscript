@@ -15,7 +15,7 @@ pub const TokenBuf = StaticAllocBuffer.define(Self, &Global.g.medium_block_alloc
 const Self = @This();
 
 kind: KIND,
-source_key: u16,
+source_key: u16, //VERIFY this might not be needed because the token list is now stored in the SourceManager and its source key is implicit
 row_start: u32,
 row_end: u32,
 col_start: u32,
@@ -142,50 +142,6 @@ pub const KIND = enum(u8) {
     ILLEGAL, // TL
 };
 
-// pub const WARN = enum(u8) {
-//     NONE,
-//     WARN_AMBIGUOUS_SATURATION,
-//     WARN_AMBIGUOUS_ZERO,
-//     WARN_UTF8_ILLEGAL_FIRST_BYTE,
-//     WARN_UTF8_MISSING_CONTINUATION_BYTE,
-//     WARN_UTF8_UNEXPECTED_CONTINUATION_BYTE,
-//     WARN_UTF8_ILLEGAL_CHAR_CODE,
-//     WARN_UTF8_SOURCE_ENDED_EARLY,
-//     WARN_UTF8_OVERLONG_ENCODING,
-//     ILLEGAL_OPERATOR,
-//     ILLEGAL_BYTE,
-//     ILLEGAL_FIRST_CHAR_FOR_TOKEN,
-//     ILLEGAL_ALPHANUM_IN_BINARY,
-//     ILLEGAL_ALPHANUM_IN_OCTAL,
-//     ILLEGAL_ALPHANUM_IN_HEX,
-//     ILLEGAL_ALPHANUM_IN_DECIMAL,
-//     ILLEGAL_NUMBER_LITERAL_OVERFLOWS_64_BITS,
-//     ILLEGAL_NUMBER_LITERAL_NO_SIGNIFICANT_BITS,
-//     ILLEGAL_INTEGER_LITERAL_LOSS_OF_DATA,
-//     ILLEGAL_INTEGER_LITERAL_NEG_OVERFLOWS_I64,
-//     ILLEGAL_FLOAT_LITERAL_TOO_LARGE,
-//     ILLEGAL_FLOAT_LITERAL_TOO_SMALL,
-//     ILLEGAL_FLOAT_TOO_MANY_SIG_DIGITS,
-//     ILLEGAL_NUMBER_TOO_MANY_DOTS,
-//     ILLEGAL_IDENT_TOO_LONG,
-//     ILLEGAL_IDENT_BEGINS_WITH_DIGIT,
-//     ILLEGAL_NUMBER_TOO_MANY_EXPONENTS,
-//     ILLEGAL_NUMBER_PERIOD_IN_EXPONENT,
-//     ILLEGAL_NUMBER_EXPONENT_TOO_MANY_DIGITS,
-//     ILLEGAL_STRING_NO_END_QUOTE,
-//     ILLEGAL_STRING_ESCAPE_SEQUENCE,
-//     ILLEGAL_STRING_MULTILINE_NON_WHITESPACE_BEFORE_BACKTICK,
-//     ILLEGAL_STRING_FILE_ENDED_BEFORE_TERMINAL_CHAR,
-//     ILLEGAL_STRING_OCTAL_ESCAPE,
-//     ILLEGAL_STRING_HEX_ESCAPE,
-//     ILLEGAL_STRING_SHORT_UNICODE_ESCAPE,
-//     ILLEGAL_STRING_LONG_UNICODE_ESCAPE,
-//     ILLEGAL_STRING_MULTILINE_NEVER_TERMINATES,
-//     ILLEGAL_STRING_MULTI_R_CURLY_MUST_ESCAPE,
-// };
-// pub const SMALLEST_WARN: u8 = @intFromEnum(WARN.WARN_AMBIGUOUS_SATURATION);
-// pub const SMALLEST_ILLEGAL: u8 = @intFromEnum(WARN.ILLEGAL_OPERATOR);
-
 pub const LONGEST_KEYWORD = 8;
 const KW_TUPLE_1 = struct { id: *const [1:0]u8, k: KIND, v: u64 };
 const KW_TUPLE_2 = struct { id: *const [2:0]u8, k: KIND, v: u64 };
@@ -268,49 +224,49 @@ pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     for (KW_TABLE_1) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
-        out[i] = IdentBlock.parse_from_string(kw.id, NOTICE.ERROR).ident.data[0];
+        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
         i += 1;
     }
     break :eval out;
@@ -433,14 +389,16 @@ pub const KIND_NAME: [@typeInfo(KIND).Enum.fields.len][]const u8 = compute: {
     break :compute table;
 };
 
-pub fn create_token_output_file(alloc: Allocator, working_dir: *const std.fs.Dir, path: []const u8, list: *List(Self)) !std.fs.File {
+pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8, tokens: *TokenBuf.Slice) !std.fs.File {
     const out_file = try working_dir.createFile(path, std.fs.File.CreateFlags{
         .read = true,
         .exclusive = false,
         .truncate = true,
     });
     var row: u32 = 0;
-    for (list.items) |token| {
+    const string_builder = Global.U8BufSmall.List.create();
+    defer string_builder.release();
+    for (tokens.slice()) |token| {
         const name = KIND_NAME[@intFromEnum(token.kind)];
         while (token.row_start > row) {
             row += 1;
@@ -450,25 +408,26 @@ pub fn create_token_output_file(alloc: Allocator, working_dir: *const std.fs.Dir
             KIND.LIT_INTEGER,
             => {
                 if (token.data_extra == 1) { // negative
-                    _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, -@as(i64, @bitCast(token.data_val_or_ptr)) }));
+                    _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, -@as(i64, @bitCast(token.data_val_or_ptr)) }));
                 } else {
-                    _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, token.data_val_or_ptr }));
+                    _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, token.data_val_or_ptr }));
                 }
             },
             KIND.LIT_FLOAT => {
-                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({d}) ", .{ name, @as(f64, @bitCast(token.data_val_or_ptr)) }));
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, @as(f64, @bitCast(token.data_val_or_ptr)) }));
             },
             KIND.LIT_BOOL => {
-                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(token.data_val_or_ptr)))) }));
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(token.data_val_or_ptr)))) }));
             },
             KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
-                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({s}) ", .{ name, ProgramROM.global.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.g.token_rom.data.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
             },
             KIND.IDENT => {
-                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s}({s}) ", .{ name, IdentManager.global.ident_names.items[token.data_val_or_ptr] }));
+                const ident_loc = Global.g.ident_manager.ident_name_locs.ptr[token.data_val_or_ptr];
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.g.ident_manager.ident_buffer.ptr[ident_loc.start..ident_loc.end] }));
             },
             else => {
-                _ = try out_file.write(try std.fmt.allocPrint(alloc, "{s} ", .{name}));
+                _ = try out_file.write(string_builder.quick_fmt_string("{s} ", .{name}));
             },
         }
     }

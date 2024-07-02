@@ -62,7 +62,7 @@ small_block_alloc: BlockAllocator,
 small_alloc_concrete: SmallAlloc,
 ident_manager: IdentManager,
 notice_manager: NoticeManager,
-program_rom: ProgramROM,
+token_rom: ProgramROM,
 source_manager: SourceManager,
 
 pub fn init(root_alloc: Allocator) Self {
@@ -88,14 +88,14 @@ pub fn init(root_alloc: Allocator) Self {
         .small_alloc_concrete = small,
         .ident_manager = IdentManager.new(medium_alloc),
         .notice_manager = NoticeManager.new(medium_alloc),
-        .program_rom = ProgramROM.new(medium_alloc),
+        .token_rom = ProgramROM.new(medium_alloc),
         .source_manager = SourceManager.new(large_alloc),
     };
 }
 
 pub fn cleanup(self: *Self) void {
     self.source_manager.cleanup();
-    self.program_rom.cleanup();
+    self.token_rom.cleanup();
     self.notice_manager.cleanup();
     self.ident_manager.cleanup();
     self.small_alloc_concrete.release_all_memory();
@@ -107,7 +107,6 @@ pub const U8BufSmall = StaticAllocBuffer.define(u8, &g.small_block_alloc);
 pub const U8BufMedium = StaticAllocBuffer.define(u8, &g.medium_block_alloc);
 pub const U8BufLarge = StaticAllocBuffer.define(u8, &g.large_block_alloc);
 
-
 pub const BufLoc = struct {
     start: u32,
     end: u32,
@@ -118,4 +117,13 @@ pub const BufLoc = struct {
             .end = end,
         };
     }
+
+    pub inline fn new_usize(start: usize, end: usize) BufLoc {
+        return BufLoc{
+            .start = @as(u32, start),
+            .end = @as(u32, end),
+        };
+    }
 };
+
+pub const BufLocBufMedium = StaticAllocBuffer.define(BufLoc, &g.medium_block_alloc);

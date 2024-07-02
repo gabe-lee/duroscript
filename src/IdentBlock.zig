@@ -8,6 +8,11 @@ const IdentBlock = @import("./IdentBlock.zig");
 const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
 const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
+
+pub const IdentBlockBufMed = StaticAllocBuffer.define(IdentBlock, &Global.g.medium_block_alloc);
+pub const IdentBlockBufSmall = StaticAllocBuffer.define(IdentBlock, &Global.g.small_block_alloc);
 
 const Self = @This();
 pub const INNER = [6]u64;
@@ -44,6 +49,20 @@ pub fn compile_keyword(comptime string: []const u8, comptime is_builtin: bool) I
         @compileError("FAILED TO COMPILE DUROSCRIPT KEYWORD");
     }
     return ident;
+}
+
+pub fn generate_keyword(comptime string: []const u8, comptime is_builtin: bool) IdentBlock {
+    var reader = SourceReader.new(0, string);
+    var token = TokenBuilder.new(0, &reader);
+    const ident = parse_from_source(&reader, &token, is_builtin);
+    if (token.has_notice or token.kind == TOK.ILLEGAL) @compileError("Error parsing language keyword into IdentBlock");
+    return ident;
+}
+
+pub fn parse_from_string(string: []const u8, comptime is_builtin: bool) IdentBlock {
+    var reader = SourceReader.new(0, string);
+    var token = TokenBuilder.new(0, &reader);
+    return parse_from_source(&reader, &token, is_builtin);
 }
 
 pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime is_builtin: bool) IdentBlock {

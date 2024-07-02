@@ -41,11 +41,10 @@ pub fn new(source: []const u8, source_key: u16) Self {
 
 pub fn parse_source(self: *Self) void {
     var cont = true;
-    const alloc = self.arena.promote(SourceManager.global);
     while (cont) {
         const token = self.next_token();
         if (token.kind == TOK.EOF) cont = false;
-        self.token_list.append(alloc, token) catch @panic(APPEND_PANIC_MSG);
+        self.token_list.append(token);
     }
 }
 
@@ -355,7 +354,7 @@ pub fn next_token(self: *Self) Token {
                 const byte_2 = self.reader.read_next_ascii(token);
                 switch (byte_2) {
                     ASC.DUBL_QUOTE => {
-                        TemplateString.TemplateStringLexed.parse_from_source(&self.reader, token);
+                        TemplateString.TemplateStringBuilder.parse_from_source(&self.reader, token);
                         return self.finish_token(token);
                     },
                     else => self.reader.rollback_position(),

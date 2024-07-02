@@ -11,16 +11,15 @@ const SourceReader = @import("./SourceReader.zig");
 const NoticeManager = @import("./NoticeManager.zig");
 const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
-const APPEND_PANIC_MSG = @import("./Constants.zig").APPEND_PANIC_MSG;
-
-const ParsingAllocator = @import("./ParsingAllocator.zig");
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
 const ProgramROM = @import("./ProgramROM.zig");
 
 const Self = @This();
 
 const IDENT_LIST_OFFSET = @sizeOf(u32) * 6;
 
-slice: [*]const u8,
+ptr: [*]const u8,
 segment_count: u32,
 ident_count: u32,
 replace_list_offset: u32,
@@ -41,72 +40,73 @@ const ConstSegment = struct {
     end: u32,
 };
 
-pub const TemplateStringLexed = struct {
-    alloc: Allocator,
-    const_source: List(u8),
+const ConstSegmentBuf = StaticAllocBuffer.define(ConstSegment, &Global.g.small_block_alloc);
+const ReplaceSegmentBuf = StaticAllocBuffer.define(ReplaceSegment, &Global.g.small_block_alloc);
+
+pub const TemplateStringBuilder = struct {
+    const_source: Global.U8BufSmall.List,
     seg_count: u32,
-    seg_list: List(u8),
-    ident_list: List(IdentBlock),
-    const_list: List(ConstSegment),
-    replace_list: List(ReplaceSegment),
+    seg_list: Global.U8BufSmall.List,
+    ident_list: IdentBlock.IdentBlockBufSmall.List,
+    const_list: ConstSegmentBuf.List,
+    replace_list: ReplaceSegmentBuf.List,
 
     const SIDX_MASK = 0b11111111_11111111_11111111_11111000;
     const SIDX_SHIFT = 3;
     const SSUB_MASK = 0b111;
     const SERIAL_ALIGN = @max(@max(@max(@alignOf(u32), @alignOf(ConstSegment)), @alignOf(ReplaceSegment)), @alignOf(IdentBlock));
 
-    fn create() TemplateStringLexed {
-        return TemplateStringLexed{
-            .alloc = ParsingAllocator.global.alloc,
-            .const_source = List(u8){},
+    fn create() TemplateStringBuilder {
+        return TemplateStringBuilder{
+            .const_source = Global.U8BufSmall.List.create(),
             .seg_count = 0,
-            .seg_list = List(u8){},
-            .ident_list = List(IdentBlock){},
-            .const_list = List(ConstSegment){},
-            .replace_list = List(ReplaceSegment){},
+            .seg_list = Global.U8BufSmall.List.create(),
+            .ident_list = IdentBlock.IdentBlockBufSmall.List,
+            .const_list = ConstSegmentBuf.List.create(),
+            .replace_list = ReplaceSegmentBuf.List.create(),
         };
     }
 
-    fn cleanup(self: *TemplateStringLexed) void {
-        self.const_source.deinit(self.alloc);
-        self.seg_list.deinit(self.alloc);
-        self.ident_list.deinit(self.alloc);
-        self.const_list.deinit(self.alloc);
-        self.replace_list.deinit(self.alloc);
+    fn cleanup(self: *TemplateStringBuilder) void {
+        self.const_source.release();
+        self.seg_list.release();
+        self.ident_list.release();
+        self.const_list.release();
+        self.replace_list.release();
         self.seg_count = 0;
     }
 
-    fn push_const_segment(self: *TemplateStringLexed, bytes: []const u8) void {
+    fn push_const_segment(self: *TemplateStringBuilder, bytes: []const u8) void {
         const real_idx = (self.seg_count & SIDX_MASK) >> SIDX_SHIFT;
-        if (real_idx == self.seg_list.items.len) {
-            self.seg_list.append(self.alloc, 0) catch @panic(APPEND_PANIC_MSG);
+        if (real_idx == self.seg_list.len) {
+            self.seg_list.append(0);
         }
         self.seg_count += 1;
-        const start: u32 = @intCast(self.const_source.items.len);
-        self.const_source.appendSlice(self.alloc, bytes) catch @panic(APPEND_PANIC_MSG);
-        const end: u32 = @intCast(self.const_source.items.len);
-        self.const_list.append(self.alloc, ConstSegment{ .start = start, .end = end }) catch @panic(APPEND_PANIC_MSG);
+        const start: u32 = @intCast(self.const_source.len);
+        self.const_source.append_slice(bytes);
+        const end: u32 = @intCast(self.const_source.len);
+        self.const_list.append(ConstSegment{ .start = start, .end = end });
     }
 
-    fn push_replace_segment(self: *TemplateStringLexed, seg: ReplaceSegment) void {
+    fn push_replace_segment(self: *TemplateStringBuilder, seg: ReplaceSegment) void {
         const real_idx = (self.seg_count & SIDX_MASK) >> SIDX_SHIFT;
         const sub_idx: u8 = @truncate(self.seg_count & SSUB_MASK);
-        if (real_idx == self.seg_list.items.len) {
-            self.seg_list.append(self.alloc, 0) catch @panic(APPEND_PANIC_MSG);
+        if (real_idx == self.seg_list.len) {
+            self.seg_list.append(0);
         }
-        self.seg_list.items[real_idx] |= @as(u8, 1) << @intCast(sub_idx);
+        self.seg_list.ptr[real_idx] |= @as(u8, 1) << @intCast(sub_idx);
         self.seg_count += 1;
-        self.replace_list.append(self.alloc, seg) catch @panic(APPEND_PANIC_MSG);
+        self.replace_list.append(seg);
     }
 
-    fn serialize_to_ROM(self: *TemplateStringLexed, token: *TokenBuilder) void {
+    fn serialize_to_token_rom(self: *TemplateStringBuilder, token: *TokenBuilder) void {
         assert(token.kind == TOK.LIT_STR_TEMPLATE);
-        const program_rom = &ProgramROM.global;
-        const replace_list_len: u32 = @truncate(self.replace_list.items.len * @sizeOf(ReplaceSegment));
-        const const_list_len: u32 = @truncate(self.const_list.items.len * @sizeOf(ConstSegment));
-        const ident_list_len: u32 = @truncate(self.ident_list.items.len * @sizeOf(IdentBlock));
-        const const_source_len: u32 = @truncate(self.const_source.items.len);
-        const switch_list_byte_len: u32 = @truncate(self.seg_list.items.len);
+        const token_rom = &Global.g.token_rom;
+        const replace_list_len: u32 = @intCast(self.replace_list.len * @sizeOf(ReplaceSegment));
+        const const_list_len: u32 = @intCast(self.const_list.len * @sizeOf(ConstSegment));
+        const ident_list_len: u32 = @intCast(self.ident_list.len * @sizeOf(IdentBlock));
+        const const_source_len: u32 = @intCast(self.const_source.len);
+        const switch_list_byte_len: u32 = @intCast(self.seg_list.len);
         const static_len: u32 = IDENT_LIST_OFFSET;
         const len: u32 = static_len +
             ident_list_len +
@@ -115,24 +115,24 @@ pub const TemplateStringLexed = struct {
             const_source_len +
             switch_list_byte_len;
         assert(len < std.math.maxInt(u32));
-        program_rom.prepare_space_for_write(len, SERIAL_ALIGN);
-        const ptr: u64 = @bitCast(program_rom.len);
+        token_rom.prepare_space_for_write(len, SERIAL_ALIGN);
+        const ptr: u64 = @bitCast(token_rom.len);
         const replace_list_offset: u32 = IDENT_LIST_OFFSET + ident_list_len;
         const const_list_offset: u32 = replace_list_offset + replace_list_len;
         const const_source_offset: u32 = const_list_offset + const_list_len;
         const seg_list_offset: u32 = const_source_offset + const_source_len;
-        program_rom.write_single(u32, self.seg_count);
-        program_rom.write_single(u32, @intCast(self.ident_list.items.len));
-        program_rom.write_single(u32, replace_list_offset);
-        program_rom.write_single(u32, const_list_offset);
-        program_rom.write_single(u32, const_source_offset);
-        program_rom.write_single(u32, seg_list_offset);
-        program_rom.write_slice(IdentBlock, self.ident_list.items);
-        program_rom.write_slice(ReplaceSegment, self.replace_list.items);
-        program_rom.write_slice(ConstSegment, self.const_list.items);
-        program_rom.write_slice(u8, self.const_source.items);
-        program_rom.write_slice(u8, self.seg_list.items);
-        assert(len == program_rom.len - ptr);
+        token_rom.write_single(u32, self.seg_count);
+        token_rom.write_single(u32, @intCast(self.ident_list.len));
+        token_rom.write_single(u32, replace_list_offset);
+        token_rom.write_single(u32, const_list_offset);
+        token_rom.write_single(u32, const_source_offset);
+        token_rom.write_single(u32, seg_list_offset);
+        token_rom.write_slice(IdentBlock, self.ident_list.slice());
+        token_rom.write_slice(ReplaceSegment, self.replace_list.slice());
+        token_rom.write_slice(ConstSegment, self.const_list.slice());
+        token_rom.write_slice(u8, self.const_source.slice());
+        token_rom.write_slice(u8, self.seg_list.slice());
+        assert(len == token_rom.len - ptr);
         token.data_val_or_ptr = ptr;
         token.data_len = len;
         self.cleanup();
@@ -141,64 +141,64 @@ pub const TemplateStringLexed = struct {
 
     pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder) void {
         token.kind = TOK.LIT_STR_TEMPLATE;
-        var t_string = TemplateStringLexed.create();
+        var t_string = TemplateStringBuilder.create();
         var is_escape: bool = false;
-        var const_builder = List(u8){};
-        defer const_builder.deinit(t_string.alloc);
-        parseloop: while (!source.is_complete()) {
+        var const_builder = Global.U8BufSmall.List.create();
+        defer const_builder.release();
+        parseloop: while (source.curr.pos < source.data.len) {
             const char = source.read_next_utf8_char(token);
             switch (is_escape) {
                 true => {
                     is_escape = false;
                     switch (char.code) {
                         ASC.n => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append(ASC.NEWLINE);
                         },
                         ASC.t => {
-                            const_builder.append(t_string.alloc, ASC.H_TAB) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append(ASC.H_TAB);
                         },
                         ASC.r => {
-                            const_builder.append(t_string.alloc, ASC.CR) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append(ASC.CR);
                         },
                         ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK, ASC.L_CURLY => {
-                            const_builder.append(t_string.alloc, char.bytes[0]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append(char.bytes[0]);
                         },
                         ASC.o => {
                             const utf8 = source.read_next_n_bytes_as_octal_escape('o', 3, token);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.x => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape('x', 2, token);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.u => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape('u', 4, token);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.U => {
                             const utf8 = source.read_next_n_bytes_as_hex_escape('U', 8, token);
-                            const_builder.appendSlice(t_string.alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         else => {
                             token.attach_notice_here(NOTICE.illegal_string_escape_sequence, SEVERITY.ERROR, source);
                             token.kind = TOK.ILLEGAL;
-                            const_builder.appendSlice(t_string.alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]);
                         },
                     }
                 },
                 else => {
                     switch (char.code) {
                         ASC.NEWLINE => {
-                            const_builder.append(t_string.alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append(ASC.NEWLINE);
                             source.skip_whitespace_except_newline();
-                            if (!source.is_complete()) {
+                            if (source.curr.pos < source.data.len) {
                                 const next_byte = source.read_next_ascii(token);
                                 switch (next_byte) {
                                     ASC.BACKTICK => {},
                                     ASC.NEWLINE => {
-                                        if (const_builder.items.len > 0) {
-                                            t_string.push_const_segment(const_builder.items);
-                                            const_builder.clearAndFree(t_string.alloc);
+                                        if (const_builder.len > 0) {
+                                            t_string.push_const_segment(const_builder.slice());
+                                            const_builder.clear();
                                         }
                                         token.attach_notice_here(NOTICE.runaway_multiline_string, SEVERITY.ERROR, source);
                                         token.kind = TOK.ILLEGAL;
@@ -210,9 +210,8 @@ pub const TemplateStringLexed = struct {
                                     },
                                 }
                             } else {
-                                if (const_builder.items.len > 0) {
-                                    t_string.push_const_segment(const_builder.items);
-                                    const_builder.clearAndFree(t_string.alloc);
+                                if (const_builder.len > 0) {
+                                    t_string.push_const_segment(const_builder.slice());
                                 }
                                 token.attach_notice_here(NOTICE.source_ended_before_string_terminated, SEVERITY.ERROR, source);
                                 token.kind = TOK.ILLEGAL;
@@ -223,20 +222,20 @@ pub const TemplateStringLexed = struct {
                             is_escape = true;
                         },
                         ASC.L_CURLY => {
-                            if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items);
-                                const_builder.clearRetainingCapacity();
+                            if (const_builder.len > 0) {
+                                t_string.push_const_segment(const_builder.slice());
+                                const_builder.clear();
                             }
                             source.skip_whitespace();
                             const ident_result = IdentBlock.parse_from_source(source, token, false);
 
                             var ident_idx: u32 = 0;
-                            while (ident_idx < t_string.ident_list.items.len) {
-                                if (IdentBlock.eql(ident_result.ident, t_string.ident_list.items[ident_idx])) break;
+                            while (ident_idx < t_string.ident_list.len) {
+                                if (IdentBlock.eql(ident_result.ident, t_string.ident_list.ptr[ident_idx])) break;
                                 ident_idx += 1;
                             }
-                            if (ident_idx == t_string.ident_list.items.len) {
-                                t_string.ident_list.append(t_string.alloc, ident_result.ident) catch @panic(APPEND_PANIC_MSG);
+                            if (ident_idx == t_string.ident_list.len) {
+                                t_string.ident_list.append(ident_result.ident);
                             }
                             source.skip_whitespace();
                             const separator_or_end = source.read_next_ascii(token);
@@ -260,13 +259,13 @@ pub const TemplateStringLexed = struct {
                             });
                         },
                         ASC.DUBL_QUOTE => {
-                            if (const_builder.items.len > 0) {
-                                t_string.push_const_segment(const_builder.items);
+                            if (const_builder.len > 0) {
+                                t_string.push_const_segment(const_builder.slice());
                             }
                             break :parseloop;
                         },
                         else => {
-                            const_builder.appendSlice(t_string.alloc, char.bytes[0..char.len]) catch @panic(APPEND_PANIC_MSG);
+                            const_builder.append_slice(char.bytes[0..char.len]);
                         },
                     }
                 },
@@ -276,7 +275,7 @@ pub const TemplateStringLexed = struct {
             t_string.cleanup();
             return;
         }
-        return t_string.serialize_to_ROM(token);
+        return t_string.serialize_to_token_rom(token);
     }
 };
 

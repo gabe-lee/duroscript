@@ -567,14 +567,16 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 return;
             }
 
-            /// Extends the list by 1 element. Allocates more memory as necessary.
+            /// Adds 1 element at the end of the list. Allocates more memory as necessary.
+            ///
             /// Invalidates element pointers if additional memory is needed.
             pub fn append(self: *List, item: T) void {
                 const new_item_ptr = self.append_slot();
                 new_item_ptr.* = item;
             }
 
-            /// Extends the list by 1 element.
+            /// Adds 1 element at the end of the list.
+            ///
             /// Never invalidates element pointers.
             pub fn append_assume_capacity(self: *List, item: T) void {
                 const new_item_ptr = self.append_slot_assume_capacity();
@@ -643,9 +645,20 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 return m.len;
             }
 
+            /// Appends a formatted string to the list
+            ///
             /// Only valid when defined element type `T` is `u8`
             pub inline fn append_fmt_string(self: *List, comptime fmt: []const u8, args: anytype) void {
                 std.fmt.format(self.writer(), fmt, args) catch unreachable;
+            }
+
+            /// Clears list (keeps capacity), appends a formatted string, and returns the resulting byte slice
+            ///
+            /// Only valid when defined element type `T` is `u8`
+            pub inline fn quick_fmt_string(self: *List, comptime fmt: []const u8, args: anytype) []const u8 {
+                self.clear();
+                std.fmt.format(self.writer(), fmt, args) catch unreachable;
+                return self.slice();
             }
 
             /// Append a value to the list `count` times.
