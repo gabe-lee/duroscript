@@ -26,8 +26,8 @@ pub fn cleanup(self: *Self) void {
 pub fn prepare_space_for_write(self: *Self, add_bytes: usize, comptime need_align: usize) void {
     const aligned_start = mem.alignForward(usize, self.data.len, need_align);
     const waste = aligned_start - self.data.len;
-    const new_required = self.len + aligned_start + add_bytes;
-    self.data.ensure_cap(new_required);
+    const new_required = self.data.len + aligned_start + add_bytes;
+    _ = self.data.ensure_cap(new_required);
     self.data.set_len_to(aligned_start);
     self.waste += waste;
 }

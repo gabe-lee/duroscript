@@ -40,8 +40,8 @@ const ConstSegment = struct {
     end: u32,
 };
 
-const ConstSegmentBuf = StaticAllocBuffer.define(ConstSegment, &Global.g.small_block_alloc);
-const ReplaceSegmentBuf = StaticAllocBuffer.define(ReplaceSegment, &Global.g.small_block_alloc);
+const ConstSegmentBuf = StaticAllocBuffer.define(ConstSegment, &Global.small_block_alloc);
+const ReplaceSegmentBuf = StaticAllocBuffer.define(ReplaceSegment, &Global.small_block_alloc);
 
 pub const TemplateStringBuilder = struct {
     const_source: Global.U8BufSmall.List,
@@ -61,7 +61,7 @@ pub const TemplateStringBuilder = struct {
             .const_source = Global.U8BufSmall.List.create(),
             .seg_count = 0,
             .seg_list = Global.U8BufSmall.List.create(),
-            .ident_list = IdentBlock.IdentBlockBufSmall.List,
+            .ident_list = IdentBlock.IdentBlockBufSmall.List.create(),
             .const_list = ConstSegmentBuf.List.create(),
             .replace_list = ReplaceSegmentBuf.List.create(),
         };
@@ -101,7 +101,7 @@ pub const TemplateStringBuilder = struct {
 
     fn serialize_to_token_rom(self: *TemplateStringBuilder, token: *TokenBuilder) void {
         assert(token.kind == TOK.LIT_STR_TEMPLATE);
-        const token_rom = &Global.g.token_rom;
+        const token_rom = &Global.token_rom;
         const replace_list_len: u32 = @intCast(self.replace_list.len * @sizeOf(ReplaceSegment));
         const const_list_len: u32 = @intCast(self.const_list.len * @sizeOf(ConstSegment));
         const ident_list_len: u32 = @intCast(self.ident_list.len * @sizeOf(IdentBlock));
@@ -116,7 +116,7 @@ pub const TemplateStringBuilder = struct {
             switch_list_byte_len;
         assert(len < std.math.maxInt(u32));
         token_rom.prepare_space_for_write(len, SERIAL_ALIGN);
-        const ptr: u64 = @bitCast(token_rom.len);
+        const ptr: u64 = @bitCast(token_rom.data.len);
         const replace_list_offset: u32 = IDENT_LIST_OFFSET + ident_list_len;
         const const_list_offset: u32 = replace_list_offset + replace_list_len;
         const const_source_offset: u32 = const_list_offset + const_list_len;
@@ -132,7 +132,7 @@ pub const TemplateStringBuilder = struct {
         token_rom.write_slice(ConstSegment, self.const_list.slice());
         token_rom.write_slice(u8, self.const_source.slice());
         token_rom.write_slice(u8, self.seg_list.slice());
-        assert(len == token_rom.len - ptr);
+        assert(len == token_rom.data.len - ptr);
         token.data_val_or_ptr = ptr;
         token.data_len = len;
         self.cleanup();
@@ -164,19 +164,19 @@ pub const TemplateStringBuilder = struct {
                             const_builder.append(char.bytes[0]);
                         },
                         ASC.o => {
-                            const utf8 = source.read_next_n_bytes_as_octal_escape('o', 3, token);
+                            const utf8 = source.read_next_n_bytes_as_octal_escape(3, token);
                             const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.x => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape('x', 2, token);
+                            const utf8 = source.read_next_n_bytes_as_hex_escape(2, token);
                             const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.u => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape('u', 4, token);
+                            const utf8 = source.read_next_n_bytes_as_hex_escape(4, token);
                             const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         ASC.U => {
-                            const utf8 = source.read_next_n_bytes_as_hex_escape('U', 8, token);
+                            const utf8 = source.read_next_n_bytes_as_hex_escape(8, token);
                             const_builder.append_slice(utf8.bytes[0..utf8.len]);
                         },
                         else => {

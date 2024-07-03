@@ -13,7 +13,7 @@ const debug = std.debug.print;
 const Self = @This();
 
 data: []const u8,
-key: u16,
+source_key: u16,
 curr: SourceIdx,
 prev: SourceIdx,
 rolled_back_to_prev: bool,
@@ -270,14 +270,14 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
             token.attach_notice_here(NOTICE.utf8_unexpected_continue_byte, SEVERITY.ERROR, self);
             token.kind = TOK.ILLEGAL;
             self.next_utf8 = UTF8_Read_Result.replace_char();
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
         else => {
             self.curr.advance_one_col(1);
             token.attach_notice_here(NOTICE.utf8_illegal_byte, SEVERITY.ERROR, self);
             token.kind = TOK.ILLEGAL;
             self.next_utf8 = UTF8_Read_Result.replace_char();
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
     };
     switch (utf8_len) {
@@ -289,7 +289,7 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
             }
             const bytes = [4]u8{ self.data[self.prev.pos], 0, 0, 0 };
             self.next_utf8 = UTF8_Read_Result.new(bytes[0], bytes, 1);
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
         2 => {
             if (self.data.len - self.curr.pos < 2) {
@@ -297,14 +297,14 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_multibyte_char_source_ended_early, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 1] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(1);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const code: u32 =
                 (@as(u32, (self.data[self.curr.pos] & U.BYTE_1_OF_2_VAL_MASK)) << 6) |
@@ -314,11 +314,11 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_unexpected_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const bytes = [4]u8{ self.data[self.curr.pos], self.data[self.curr.pos + 1], 0, 0 };
             self.next_utf8 = UTF8_Read_Result.new(code, bytes, 2);
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
         3 => {
             if (self.data.len - self.curr.pos < 3) {
@@ -326,21 +326,21 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_multibyte_char_source_ended_early, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 1] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(1);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 2] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(2);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const code: u32 =
                 (@as(u32, (self.data[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK)) << 12) |
@@ -351,18 +351,18 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_illegal_codepoint, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (code < U.MIN_3_BYTE_CODE_POINT) {
                 self.curr.advance_one_col(3);
                 token.attach_notice_here(NOTICE.utf8_overlong_encoding, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const bytes = [4]u8{ self.data[self.curr.pos], self.data[self.curr.pos + 1], self.data[self.curr.pos + 2], 0 };
             self.next_utf8 = UTF8_Read_Result.new(code, bytes, 3);
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
         4 => {
             if (self.data.len - self.curr.pos < 4) {
@@ -370,28 +370,28 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_multibyte_char_source_ended_early, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 1] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(1);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 2] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(2);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (self.data[self.curr.pos + 3] & U.CONT_BYTE_PRE_MASK != U.CONT_BYTE_PREFIX) {
                 self.curr.advance_one_col(3);
                 token.attach_notice_here(NOTICE.utf8_missing_or_malformed_continue_byte, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const code: u32 =
                 (@as(u32, (self.data[self.curr.pos] & U.BYTE_1_OF_3_VAL_MASK)) << 18) |
@@ -403,18 +403,18 @@ pub fn read_next_utf8_char(self: *Self, token: *TokenBuilder) UTF8_Read_Result {
                 token.attach_notice_here(NOTICE.utf8_illegal_codepoint, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             if (code < U.MIN_4_BYTE_CODE_POINT) {
                 self.curr.advance_one_col(4);
                 token.attach_notice_here(NOTICE.utf8_overlong_encoding, SEVERITY.ERROR, self);
                 token.kind = TOK.ILLEGAL;
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             }
             const bytes = [4]u8{ self.data[self.curr.pos], self.data[self.curr.pos + 1], self.data[self.curr.pos + 2], self.data[self.curr.pos + 3] };
             self.next_utf8 = UTF8_Read_Result.new(code, bytes, 4);
-            return self.next_utf8;
+            return self.next_utf8.?;
         },
         else => unreachable,
     }
@@ -427,7 +427,7 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime n: comptime_int, 
         token.attach_notice_here(NOTICE.invalid_octal_escape_sequence, SEVERITY.ERROR, self);
         token.kind = TOK.ILLEGAL;
         self.next_utf8 = UTF8_Read_Result.replace_char();
-        return self.next_utf8;
+        return self.next_utf8.?;
     }
     var code: u8 = 0;
     var bit: u8 = n * 3;
@@ -441,7 +441,7 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime n: comptime_int, 
                 token.kind = TOK.ILLEGAL;
                 self.curr.advance_n_cols(@intCast(i), @intCast(i));
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             },
         };
         code |= val << @intCast(bit);
@@ -451,12 +451,12 @@ pub fn read_next_n_bytes_as_octal_escape(self: *Self, comptime n: comptime_int, 
         token.kind = TOK.ILLEGAL;
         self.curr.advance_n_cols(n, n);
         self.next_utf8 = UTF8_Read_Result.replace_char();
-        return self.next_utf8;
+        return self.next_utf8.?;
     }
     const utf8 = U.encode_valid_codepoint(code);
     self.curr.advance_n_cols(n, n);
     self.next_utf8 = UTF8_Read_Result.new(code, utf8.code_bytes, utf8.code_len);
-    return self.next_utf8;
+    return self.next_utf8.?;
 }
 
 pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime n: comptime_int, token: *TokenBuilder) UTF8_Read_Result {
@@ -466,7 +466,7 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime n: comptime_int, to
         token.attach_notice_here(NOTICE.invalid_short_hexidecimal_escape_sequence, SEVERITY.ERROR, self);
         token.kind = TOK.ILLEGAL;
         self.next_utf8 = UTF8_Read_Result.replace_char();
-        return self.next_utf8;
+        return self.next_utf8.?;
     }
     var code: u32 = 0;
     var bit: u8 = n * 4;
@@ -482,7 +482,7 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime n: comptime_int, to
                 token.kind = TOK.ILLEGAL;
                 self.curr.advance_n_cols(@intCast(i), @intCast(i));
                 self.next_utf8 = UTF8_Read_Result.replace_char();
-                return self.next_utf8;
+                return self.next_utf8.?;
             },
         };
         code |= val << @intCast(bit);
@@ -492,10 +492,10 @@ pub fn read_next_n_bytes_as_hex_escape(self: *Self, comptime n: comptime_int, to
         token.kind = TOK.ILLEGAL;
         self.curr.advance_n_cols(n, n);
         self.next_utf8 = UTF8_Read_Result.replace_char();
-        return self.next_utf8;
+        return self.next_utf8.?;
     }
     const utf8 = U.encode_valid_codepoint(code);
     self.curr.advance_n_cols(n, n);
     self.next_utf8 = UTF8_Read_Result.new(code, utf8.code_bytes, utf8.code_len);
-    return self.next_utf8;
+    return self.next_utf8.?;
 }

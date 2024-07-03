@@ -11,7 +11,7 @@ const BufLoc = Global.BufLoc;
 const OpenFlags = std.fs.File.OpenFlags;
 const OpenMode = std.fs.File.OpenMode;
 
-const SourceStageBuf = StaticAllocBuffer.define(SourceStage, &Global.g.medium_block_alloc);
+const SourceStageBuf = StaticAllocBuffer.define(SourceStage, &Global.medium_block_alloc);
 
 const Self = @This();
 
@@ -30,7 +30,7 @@ pub fn new() Self {
 pub fn cleanup(self: *Self) void {
     self.path_pool.release();
     self.path_list.release();
-    for (self.stage_list.slice()) |source_stage| {
+    for (self.stage_list.slice()) |*source_stage| {
         source_stage.cleanup();
     }
     self.stage_list.release();
@@ -44,13 +44,13 @@ pub fn get_or_create_source_key(self: *Self, complete_path: []const u8) u16 {
         var i = path.len - 1;
         while (true) {
             if (path[i] != complete_path[i]) continue;
-            if (i == 0) return idx;
+            if (i == 0) return @intCast(idx);
             i -= 1;
         }
     }
     assert(self.path_list.len <= std.math.maxInt(u16));
-    const new_idx: u16 = @as(u16, self.path_list.len);
-    const new_path_loc = BufLoc.new(self.path_pool.len, self.path_pool.len + complete_path.len);
+    const new_idx: u16 = @intCast(self.path_list.len);
+    const new_path_loc = BufLoc.new(@intCast(self.path_pool.len), @intCast(self.path_pool.len + complete_path.len));
     const new_stage = SourceStage.new(new_path_loc);
     self.path_pool.append_slice(complete_path);
     self.path_list.append(new_path_loc);
@@ -58,31 +58,39 @@ pub fn get_or_create_source_key(self: *Self, complete_path: []const u8) u16 {
     return new_idx;
 }
 
+pub fn reset_source_to_unopened(self: *Self, key: u16) void {
+    assert(key < self.stage_list.len);
+    if (@intFromEnum(self.stage_list.ptr[key]) == @intFromEnum(STATE.UNOPENED)) return;
+    self.stage_list.ptr[key].cleanup();
+    self.stage_list.ptr[key] = SourceStage.new(self.path_list.ptr[key]);
+    return;
+}
+
 pub fn advance_source_to_loaded(self: *Self, key: u16) void {
     assert(key < self.stage_list.len);
     const source = self.stage_list.ptr[key];
     if (@intFromEnum(source) >= @intFromEnum(STATE.LOADED)) return;
-    const data = source.UNOPENED;
-    const file = std.fs.openFileAbsolute(self.path_pool[data.file_path_loc.start..data.file_path_loc.end], OpenFlags{ .mode = OpenMode.read_only }) catch @panic("FAILED TO LOAD FILE");
+    var data = source.UNOPENED;
+    const file = std.fs.openFileAbsolute(self.path_pool.ptr[data.file_path_loc.start..data.file_path_loc.end], OpenFlags{ .mode = OpenMode.read_only }) catch @panic("FAILED TO LOAD FILE");
     defer file.close();
     const file_stat: ?std.fs.File.Stat = file.stat() catch null;
     if (file_stat) |stat| {
         const file_size = stat.size;
-        _ = data.file_buffer.ensure_unused_cap(@as(usize, file_size));
-        const real_len = file.readAll(data.file_buffer.slice()) catch @panic("FAILED TO READ FILE CONTENTS");
-        assert(real_len <= data.file_buffer.cap);
-        data.file_buffer.len = real_len;
+        _ = data.file_reader.ensure_unused_cap(@as(usize, file_size));
+        const real_len = file.readAll(data.file_reader.slice()) catch @panic("FAILED TO READ FILE CONTENTS");
+        assert(real_len <= data.file_reader.cap);
+        data.file_reader.len = real_len;
     } else {
         const block_size = Global.U8BufLarge.alloc.block_size();
         var cont = true;
         while (cont) {
-            _ = data.file_buffer.ensure_unused_cap(block_size);
-            const read_len = file.read(data.file_buffer.ptr[data.file_buffer.len..data.file_buffer.cap]) catch @panic("FAILED TO READ FILE CONTENTS");
-            data.file_buffer.len += read_len;
+            _ = data.file_reader.ensure_unused_cap(block_size);
+            const read_len = file.read(data.file_reader.ptr[data.file_reader.len..data.file_reader.cap]) catch @panic("FAILED TO READ FILE CONTENTS");
+            data.file_reader.len += read_len;
             cont = read_len != 0;
         }
     }
-    const file_slice = data.file_buffer.downgrade_into_slice_partial();
+    var file_slice = data.file_reader.downgrade_into_slice_partial();
     self.stage_list.ptr[key] = SourceStage{
         .LOADED = .{
             .source = file_slice,
@@ -96,7 +104,7 @@ pub fn advance_source_to_lexed(self: *Self, key: u16) void {
     assert(key < self.stage_list.len);
     if (@intFromEnum(self.stage_list.ptr[key]) >= @intFromEnum(STATE.LEXED)) return;
     self.advance_source_to_loaded(key);
-    const data = self.stage_list.ptr[key].LOADED;
+    var data = self.stage_list.ptr[key].LOADED;
     data.source_lexer.parse_source();
     self.stage_list.ptr[key] = SourceStage{
         .LEXED = .{
@@ -138,7 +146,7 @@ pub const STATE = enum(u8) {
 pub const SourceStage = union(STATE) {
     UNOPENED: struct {
         file_path_loc: BufLoc,
-        file_buffer: Global.U8BufLarge.List,
+        file_reader: Global.U8BufLarge.List,
     },
     LOADED: struct {
         source: Global.U8BufLarge.Slice,
@@ -158,16 +166,16 @@ pub const SourceStage = union(STATE) {
         } };
     }
 
-    pub fn cleanup(self: SourceStage) void {
-        switch (self) {
-            .UNOPENED => |stage| {
-                stage.file_buffer.release();
+    pub fn cleanup(self: *SourceStage) void {
+        switch (self.*) {
+            .UNOPENED => |*stage| {
+                stage.file_reader.release();
             },
-            .LOADED => |stage| {
+            .LOADED => |*stage| {
                 stage.source.release();
                 stage.source_lexer.token_list.release();
             },
-            .LEXED => |stage| {
+            .LEXED => |*stage| {
                 stage.token_list.release();
                 // release ast builder
             },

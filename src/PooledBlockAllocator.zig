@@ -211,7 +211,7 @@ pub fn define(comptime config: Config) type {
     if (!math.isPowerOfTwo(config.block_size) or config.block_size < 64) @compileError("Config.block_size MUST be a power of 2 and >= 64 (64, 128, 256, 512, 1024, 2048, 4096, ... etc)");
     if (!math.isPowerOfTwo(config.backing_request_size)) @compileError("Config.backing_request_size MUST be a power of 2 and >= 64 (64, 128, 256, 512, 1024, 2048, 4096, ... etc)");
     if (config.backing_request_size < config.block_size) @compileError("Config.backing_request_size MUST be >= Config.block_size");
-    if (config.index_type != u64 or config.index_type != u32 or config.index_type != u16 or config.index_type != u8 or config.index_type != usize)
+    if (config.index_type != u64 and config.index_type != u32 and config.index_type != u16 and config.index_type != u8 and config.index_type != usize)
         @compileError("Config.index_type MUST be one of the following types: u8, u16, u32, u64, usize");
     switch (config.auto_shrink_threshold) {
         .PERCENT_MIN_MAX => |val| {
@@ -223,9 +223,9 @@ pub fn define(comptime config: Config) type {
     return struct {
         const Self = @This();
         const BLOCK_SIZE = config.block_size;
-        const LOG2_OF_BLOCK_SIZE = math.log2_int(comptime_int, BLOCK_SIZE);
+        const LOG2_OF_BLOCK_SIZE = math.log2_int(usize, BLOCK_SIZE);
         const BACKING_SIZE = config.backing_request_size;
-        const LOG2_OF_BACKING_SIZE = math.log2_int(comptime_int, BACKING_SIZE);
+        const LOG2_OF_BACKING_SIZE = math.log2_int(usize, BACKING_SIZE);
         const BLOCK_BACKING_RATIO = BACKING_SIZE / BLOCK_SIZE;
         const LOG2_OF_BLOCK_BACKING_RATIO = LOG2_OF_BACKING_SIZE - LOG2_OF_BLOCK_SIZE;
         const WIPE_ON_FREE = config.secure_wipe_freed_memory;
@@ -238,6 +238,10 @@ pub fn define(comptime config: Config) type {
         const NO_IDX = math.maxInt(T_IDX);
         const AUTO_SHRINK = config.auto_shrink;
         const AUTO_SHRINK_THRESH = config.auto_shrink_threshold;
+
+        const Bool_or_OptionalBool = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) ?bool else bool;
+        const Void_or_OptionalVoid = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) ?void else void;
+        const T_IDX_or_OptionalT_IDX = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) ?T_IDX else T_IDX;
 
         const MemSpanLogical = struct {
             mem_ptr: [*]u8,
@@ -260,7 +264,7 @@ pub fn define(comptime config: Config) type {
 
             fn new_unassigned() MemSpan {
                 return MemSpan{
-                    .mem_ptr = std.math.maxInt(usize),
+                    .mem_ptr = @ptrFromInt(std.math.maxInt(usize)),
                     .block_len = 0,
                     .next_same_state_ll = NO_IDX,
                     .prev_same_state_ll = NO_IDX,
@@ -323,25 +327,25 @@ pub fn define(comptime config: Config) type {
         inline fn user_assert(condition: bool, msg: []const u8) void {
             switch (SAFETY_CHECKS) {
                 .NEVER => if (!condition) unreachable,
-                .DUBUG => if (builtin.mode == .Debug) {
+                .DUBUG_ONLY => if (builtin.mode == .Debug) {
                     if (!condition) switch (SAFETY_SEVERE) {
                         .PANIC => @panic(msg),
                         .LOG => std.log.err(msg, .{}),
                     };
                 } else if (!condition) unreachable,
-                .RELEASE_SAFE => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+                .RELEASE_SAFE_AND_BELOW => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
                     if (!condition) switch (SAFETY_SEVERE) {
                         .PANIC => @panic(msg),
                         .LOG => std.log.err(msg, .{}),
                     };
                 } else if (!condition) unreachable,
-                .RELEASE_SMALL => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
+                .RELEASE_SMALL_AND_BELOW => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall) {
                     if (!condition) switch (SAFETY_SEVERE) {
                         .PANIC => @panic(msg),
                         .LOG => std.log.err(msg, .{}),
                     };
                 } else if (!condition) unreachable,
-                .RELEASE_FAST => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast) {
+                .RELEASE_FAST_AND_BELOW => if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast) {
                     if (!condition) switch (SAFETY_SEVERE) {
                         .PANIC => @panic(msg),
                         .LOG => std.log.err(msg, .{}),
@@ -357,10 +361,10 @@ pub fn define(comptime config: Config) type {
         inline fn should_user_assert() bool {
             return switch (SAFETY_CHECKS) {
                 .NEVER => false,
-                .DUBUG => builtin.mode == .Debug,
-                .RELEASE_SAFE => builtin.mode == .Debug or builtin.mode == .ReleaseSafe,
-                .RELEASE_SMALL => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall,
-                .RELEASE_FAST => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast,
+                .DUBUG_ONLY => builtin.mode == .Debug,
+                .RELEASE_SAFE_AND_BELOW => builtin.mode == .Debug or builtin.mode == .ReleaseSafe,
+                .RELEASE_SMALL_AND_BELOW => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall,
+                .RELEASE_FAST_AND_BELOW => builtin.mode == .Debug or builtin.mode == .ReleaseSafe or builtin.mode == .ReleaseSmall or builtin.mode == .ReleaseFast,
                 .ALWAYS => true,
             };
         }
@@ -408,7 +412,7 @@ pub fn define(comptime config: Config) type {
         }
 
         inline fn calculate_fraction_T_IDX(numer: T_IDX, denom: T_IDX) f64 {
-            return @as(f64, numer) / @as(f64, denom);
+            return @as(f64, @floatFromInt(numer)) / @as(f64, @floatFromInt(denom));
         }
 
         inline fn is_above_max_shrink_threshold(self: *Self) bool {
@@ -496,7 +500,7 @@ pub fn define(comptime config: Config) type {
             };
         }
 
-        inline fn block_size() usize {
+        fn block_size() usize {
             return BLOCK_SIZE;
         }
 
@@ -540,11 +544,11 @@ pub fn define(comptime config: Config) type {
         /// Attempting to release memory still in-use is safety-checked (dependant on setting of Config.safety_checks_panic),
         /// but full release and any applicable memory wiping will still occur before any potential error message.
         pub fn release_all_memory(self: *Self) void {
-            const did_release_used_mem = false;
+            var did_release_used_mem = false;
             var span = self.first_free_span;
             if (span == NO_IDX) span = self.first_used_span;
-            var pool_alloc_ptr = undefined;
-            var pool_alloc_blocks = 0;
+            var pool_alloc_ptr: [*]u8 = undefined;
+            var pool_alloc_blocks: T_IDX = 0;
             while (span != NO_IDX) {
                 var is_pool_alloc = false;
                 const ptr = self.span_list[span].mem_ptr;
@@ -618,7 +622,7 @@ pub fn define(comptime config: Config) type {
             user_assert(!did_release_used_mem, USER_ERROR_RELEASED_USED_MEMORY);
         }
 
-        fn split_free_span(self: *Self, span_idx: T_IDX, first_len: T_IDX) T_IDX {
+        fn split_free_span(self: *Self, span_idx: T_IDX, first_len: T_IDX) T_IDX_or_OptionalT_IDX {
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span_idx].block_len > first_len and first_len > 0, DEBUG_ATTEMPT_TO_SPLIT_SPAN_ONE_WITH_ZERO_BLOCKS);
             debug_assert(self.span_list[span_idx].state == .ASSIGNED_FREE, DEBUG_ATTEMPT_TO_SPLIT_SPAN_NOT_FREE);
@@ -637,7 +641,7 @@ pub fn define(comptime config: Config) type {
         }
 
         inline fn update_span_list_cap(self: *Self) void {
-            self.span_list_cap = @as(T_IDX, (@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
+            self.span_list_cap = @intCast((@as(usize, self.span_list[self.span_list_idx].block_len) << LOG2_OF_BLOCK_SIZE) / @sizeOf(MemSpan));
         }
 
         fn add_new_unassigned_span(self: *Self) T_IDX {
@@ -721,7 +725,7 @@ pub fn define(comptime config: Config) type {
             self.add_span_to_begining_of_linked_list(span, .UNASSIGNED);
         }
 
-        fn claim_unassigned_span(self: *Self) ?T_IDX {
+        fn claim_unassigned_span(self: *Self) T_IDX_or_OptionalT_IDX {
             // Use existing unassigned span if possible
             if (self.first_unassigned_span != NO_IDX) {
                 debug_assert(self.first_unassigned_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
@@ -751,7 +755,7 @@ pub fn define(comptime config: Config) type {
                             self.free_mem_blocks -= 1;
                             self.update_span_list_cap();
                             self.remove_span_from_its_linked_list(next_logical, .ASSIGNED_FREE);
-                            self.span_list[next_logical].state == .UNASSIGNED;
+                            self.span_list[next_logical].state = .UNASSIGNED;
                             return next_logical;
                         } else {
                             self.span_list[self.span_list_idx].block_len += 1;
@@ -790,7 +794,7 @@ pub fn define(comptime config: Config) type {
                         }
                         const claimed_idx = self.span_list_len;
                         self.span_list_len += 1;
-                        self.span_list[self.claimed_idx] = MemSpan.new_unassigned();
+                        self.span_list[claimed_idx] = MemSpan.new_unassigned();
                         debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
                         return claimed_idx;
                     }
@@ -979,7 +983,7 @@ pub fn define(comptime config: Config) type {
             return NO_IDX;
         }
 
-        fn shrink_used_span(self: *Self, span_idx: T_IDX, new_size: T_IDX) void {
+        fn shrink_used_span(self: *Self, span_idx: T_IDX, new_size: T_IDX) Void_or_OptionalVoid {
             debug_assert(new_size > 0, DEBUG_SHRINK_USED_TO_ZERO_MEANS_FREE);
             debug_assert(self.span_list[span_idx].block_len > new_size, DEBUG_SHRINK_ACTUALLY_SAME_OR_GROW);
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
@@ -996,7 +1000,7 @@ pub fn define(comptime config: Config) type {
                     return;
                 }
             }
-            const new_span = self.claim_unassigned_span();
+            const new_span = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) (self.claim_unassigned_span() orelse return null) else self.claim_unassigned_span();
             self.assign_span_to_next_logical(span_idx, new_span, delta_blocks);
             self.free_mem_blocks += delta_blocks;
             return;
@@ -1086,12 +1090,11 @@ pub fn define(comptime config: Config) type {
             user_assert(self.total_mem_blocks + blocks <= math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
             user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
             const existing_free_span = self.try_claim_free_span(blocks);
-            if (existing_free_span != NO_IDX) return self.span_list[existing_free_span].mem_ptr;
-            const new_alloc_span_idx = self.claim_unassigned_span() orelse switch (ALLOC_ERROR) {
-                .RETURNS => return null,
-                .PANICS => @panic("PooledBlockAllocator's backing allocator failed to allocate additional memory"),
-                .UNREACHABLE => unreachable,
-            };
+            if (existing_free_span != NO_IDX) {
+                const real_bytes = blocks_to_bytes(blocks);
+                return self.span_list[existing_free_span].mem_ptr[0..real_bytes];
+            }
+            const new_alloc_span_idx = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) self.claim_unassigned_span() orelse return null else self.claim_unassigned_span();
             const backing_blocks = blocks_to_backing_blocks(blocks);
             const backing_bytes = backing_blocks_to_bytes(backing_blocks);
             user_assert(self.total_mem_blocks + backing_blocks <= std.math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);

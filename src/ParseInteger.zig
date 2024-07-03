@@ -34,7 +34,7 @@ fn handle_negative_integer(raw: u64, source: *SourceReader, token: *TokenBuilder
         return;
     }
     const val: i64 = if (raw == LARGEST_RAW_VAL_FOR_NEG_I64) MIN_I64 else -@as(i64, @bitCast(raw));
-    token.set_data(val, 0, 1);
+    token.set_data(@bitCast(val), 0, 1);
     return;
 }
 

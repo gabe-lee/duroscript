@@ -1,11 +1,11 @@
-const CONST = @import("./constants.zig");
+const CONST = @import("./Constants.zig");
 const FAST_F64_POW_10_TABLE = CONST.FAST_F64_POW_10_TABLE;
 const POWER_10_TABLE = CONST.POWER_10_TABLE;
 const F64 = CONST.F64;
 const U64 = CONST.U64;
 const std = @import("std");
 const math = std.math;
-const ASC = @import("./constants.zig").ASCII;
+const ASC = @import("./Unicode.zig").ASCII;
 const assert = std.debug.assert;
 
 // ************************************************************************

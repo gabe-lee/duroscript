@@ -78,7 +78,7 @@ pub inline fn raw_free(self: Self, old_mem: []u8, log2_of_align: u8, ret_addr: u
 /// Returns the block size of this block allocator
 ///
 /// (every allocation performed by a BlockAllocator is rounded up to a multiple of this size)
-pub inline fn block_size(self: Self) usize {
+pub fn block_size(self: Self) usize {
     return self.interface.block_size();
 }
 

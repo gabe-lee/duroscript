@@ -1,5 +1,4 @@
-const WARN = @import("./Token.zig").WARN;
-const ASC = @import("./constants.zig").ASCII;
+const ASC = @import("./Unicode.zig").ASCII;
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -9,16 +8,14 @@ pub const UTF8_DecodeResult = struct {
     code_len: u8,
     read_bytes: [4]u8,
     read_len: u8,
-    warn: WARN,
 
-    inline fn new(code: u32, code_bytes: [4]u8, code_len: u8, read_bytes: [4]u8, read_len: u8, warn: WARN) UTF8_DecodeResult {
+    inline fn new(code: u32, code_bytes: [4]u8, code_len: u8, read_bytes: [4]u8, read_len: u8) UTF8_DecodeResult {
         return UTF8_DecodeResult{
             .code = code,
             .code_bytes = code_bytes,
             .code_len = code_len,
             .read_bytes = read_bytes,
             .read_len = read_len,
-            .warn = warn,
         };
     }
 };

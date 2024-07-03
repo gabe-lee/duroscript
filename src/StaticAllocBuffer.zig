@@ -45,7 +45,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
         const ALIGN: u29 = const_align;
         const LOG2_OF_ALIGN: u8 = @as(u8, math.log2_int(u29, ALIGN));
         const BLANK_ARRAY align(ALIGN) = if (sentinel) [0:sentinel]T{} else [0]T{};
-        const BLANK_PTR: Ptr = @alignCast(&BLANK_ARRAY);
+        const BLANK_PTR: Ptr = @constCast(@alignCast((BLANK_ARRAY[0..0]).ptr));
         const BLANK_LIST = List{
             .ptr = BLANK_PTR,
             .len = 0,
@@ -134,6 +134,20 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 };
                 self.* = BLANK_SLICE;
                 return list;
+            }
+
+            pub fn take_ownership_same_alloc(same_alloc_slice: ZigSlice) Slice {
+                return Slice{
+                    .ptr = same_alloc_slice.ptr,
+                    .len = same_alloc_slice.len,
+                };
+            }
+
+            pub fn give_ownership_of_slice(self: *Slice) ZigSlice {
+                assert(self.len > 0);
+                const ret_slice = self.slice();
+                self.* = BLANK_SLICE;
+                return ret_slice;
             }
 
             /// Creates a new slice using the type-defined allocator with a length equal-to
@@ -297,7 +311,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 const type_ptr: Ptr = @ptrCast(@alignCast(alloc_slice.ptr));
                 const type_len = len_from_alloc_len(alloc_slice.len);
                 return Slice{
-                    .ptr = type_ptr[0..type_len],
+                    .ptr = type_ptr,
                     .len = type_len,
                 };
             }
@@ -342,6 +356,21 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 q_slice.release();
             }
 
+            pub fn take_ownership_same_alloc(same_alloc_slice: ZigSlice) List {
+                return List{
+                    .ptr = same_alloc_slice.ptr,
+                    .len = same_alloc_slice.len,
+                    .cap = same_alloc_slice.len,
+                };
+            }
+
+            pub fn give_ownership_of_slice(self: *List) ZigSlice {
+                assert(self.len > 0);
+                const ret_slice = self.slice();
+                self.* = BLANK_LIST;
+                return ret_slice;
+            }
+
             /// Turn this StaticAllocList into its matching StaticAllocSlice type
             ///
             /// Caller assumes responsibility for dealing with undefined values
@@ -371,9 +400,9 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             ///
             /// This operation sets this slice to an empty state
             pub fn downgrade_into_slice_partial(self: *List) Slice {
-                const q_slice = self.to_quick_slice();
+                var q_slice = self.to_quick_slice();
                 self.* = BLANK_LIST;
-                q_slice.resize_exact(self.len);
+                _ = q_slice.resize_exact(self.len);
                 return q_slice;
             }
 
@@ -417,12 +446,12 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// may invalidate all element pointers if reallocation is needed
             pub fn insert_slots(self: *List, idx: usize, count: usize) []T {
                 assert(idx <= self.len);
-                const new_min_len = add_or_error(self.len, count);
+                const new_min_len = self.len + count;
 
                 if (self.cap >= new_min_len)
                     return self.insert_slots_assume_capacity(idx, count);
 
-                const q_slice = self.to_quick_slice();
+                var q_slice = self.to_quick_slice();
                 if (q_slice.resize_minimum_no_move(new_min_len)) {
                     self.from_quick_slice(q_slice);
                     return self.insert_slots_assume_capacity(idx, count);
@@ -453,7 +482,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 const to_move = self.ptr[idx..self.len];
                 self.len = new_len;
                 mem.copyBackwards(T, self.ptr[idx + count .. self.len], to_move);
-                const result = self.items[idx..self.len][0..count];
+                const result = self.ptr[idx..self.len][0..count];
                 return result;
             }
 
@@ -514,7 +543,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                     @memcpy(self.ptr[replace_start..replace_len], new_items);
                     return;
                 }
-                const new_min_len = add_or_error(self.len - replace_len, new_items.len);
+                const new_min_len = self.len - replace_len + new_items.len;
 
                 if (self.cap >= new_min_len)
                     return self.replace_range_assume_capacity(replace_start, replace_len, new_items);
@@ -614,7 +643,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             ///
             /// Invalidates all element pointers if additional memory is needed.
             pub fn append_slice(self: *List, items: []const T) void {
-                self.ensure_unused_capacity(items.len);
+                _ = self.ensure_unused_cap(items.len);
                 self.append_slice_assume_capacity(items);
             }
 
@@ -640,7 +669,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 return .{ .context = self };
             }
 
-            fn write_bytes(self: *List, m: []const u8) usize {
+            fn write_bytes(self: *List, m: []const u8) error{OutOfMemory}!usize {
                 self.append_slice(m);
                 return m.len;
             }
@@ -755,7 +784,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// Returns `false` if existing memory pointers were invalidated (underlying memory reallocated),
             /// else `true` if existing memory pointers are still valid (no memory move)
             pub inline fn ensure_cap(self: *List, new_capacity: usize) bool {
-                if (self.cap >= new_capacity) return;
+                if (self.cap >= new_capacity) return true;
                 return self.resize_cap(new_capacity);
             }
 
@@ -764,7 +793,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// Returns `false` if grow could not be completed without moving the memory address,
             /// else `true` if grow without move was successful
             pub inline fn ensure_cap_no_move(self: *List, new_capacity: usize) bool {
-                if (self.cap >= new_capacity) return;
+                if (self.cap >= new_capacity) return true;
                 return self.resize_cap_no_move(new_capacity);
             }
 
@@ -773,7 +802,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// Returns `false` if existing memory pointers were invalidated (underlying memory reallocated),
             /// else `true` if existing memory pointers are still valid (no memory move)
             pub inline fn ensure_unused_cap(self: *List, additional_count: usize) bool {
-                return self.ensure_cap(add_or_error(self.len, additional_count));
+                return self.ensure_cap(self.len + additional_count);
             }
 
             /// Checks whether `cap >= len + additional_count`, and grows capacity if needed
@@ -781,7 +810,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// Returns `false` if grow could not be completed without moving the memory address,
             /// else `true` if grow without move was successful
             pub inline fn ensure_unused_cap_no_move(self: *List, additional_count: usize) bool {
-                return self.ensure_cap_no_move(add_or_error(self.len, additional_count));
+                return self.ensure_cap_no_move(self.len + additional_count);
             }
 
             /// Increase length by 1, returning pointer to the new item slot with undefined memory.
@@ -789,7 +818,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// Invalidates all element pointers if additional memory is needed.
             pub fn append_slot(self: *List) *T {
                 const newlen = self.len + 1;
-                self.ensure_cap(newlen);
+                _ = self.ensure_cap(newlen);
                 return self.append_slot_assume_capacity();
             }
 
@@ -807,7 +836,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             ///
             /// Invalidates all element pointers if additional memory is needed.
             pub inline fn append_slots_array_ptr(self: *List, comptime count: usize) *[count]T {
-                _ = self.ensure_unused_cap(add_or_error(self.len, count));
+                _ = self.ensure_unused_cap(self.len + count);
                 self.append_slots_array_ptr_assume_capacity(count);
             }
 
@@ -825,7 +854,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             ///
             /// Invalidates all element pointers if additional memory is needed.
             pub inline fn append_slots_slice_ptr(self: *List, count: usize) []T {
-                _ = self.ensure_unused_cap(add_or_error(self.len, count));
+                _ = self.ensure_unused_cap(self.len + count);
                 self.append_slots_array_ptr_assume_capacity(count);
             }
 
@@ -900,10 +929,4 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             }
         };
     };
-}
-
-fn add_or_error(a: usize, b: usize) error{OutOfMemory}!usize {
-    const result, const overflow = @addWithOverflow(a, b);
-    if (overflow != 0) return error.OutOfMemory;
-    return result;
 }

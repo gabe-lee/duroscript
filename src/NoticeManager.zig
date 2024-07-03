@@ -8,7 +8,7 @@ const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
 const Global = @import("./Global.zig");
 
 const Self = @This();
-const NoticeBuf = StaticAllocBuffer.define(Notice, &Global.g.small_block_alloc);
+const NoticeBuf = StaticAllocBuffer.define(Notice, &Global.small_block_alloc);
 
 notice_list: NoticeBuf.List,
 panic_count: usize = 0,
@@ -25,11 +25,25 @@ pub fn new() Self {
 
 pub fn cleanup(self: *Self) void {
     self.notice_list.release();
+    self.panic_count = 0;
+    self.error_count = 0;
+    self.warn_count = 0;
+    self.hint_count = 0;
+    self.info_count = 0;
+}
+
+pub fn clear(self: *Self) void {
+    self.notice_list.clear();
+    self.panic_count = 0;
+    self.error_count = 0;
+    self.warn_count = 0;
+    self.hint_count = 0;
+    self.info_count = 0;
 }
 
 pub fn add_notice(self: *Self, notice: Notice) void {
     @setCold(true);
-    var idx = undefined;
+    var idx: usize = undefined;
     switch (notice.severity) {
         SEVERITY.PANIC => {
             idx = self.panic_count;
@@ -131,8 +145,8 @@ fn get_count_line(self: *Self) Global.U8BufSmall.Slice {
 pub fn get_notice_list_kinds(self: *Self) anyerror!Global.U8BufMedium.Slice {
     var list = Global.U8BufMedium.List.create();
     for (self.notice_list.slice()) |notice| {
-        try list.append_slice(@typeInfo(KIND).Enum.fields[@intFromEnum(notice.kind)].name);
-        try list.append(ASC.NEWLINE);
+        list.append_slice(@tagName(notice.kind));
+        list.append(ASC.NEWLINE);
     }
     return list.downgrade_into_slice_partial();
 }

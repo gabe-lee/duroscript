@@ -10,12 +10,12 @@ const List = std.ArrayListUnmanaged;
 const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
 const Global = @import("./Global.zig");
 
-pub const TokenBuf = StaticAllocBuffer.define(Self, &Global.g.medium_block_alloc);
+pub const TokenBuf = StaticAllocBuffer.define(Self, &Global.medium_block_alloc);
 
 const Self = @This();
 
 kind: KIND,
-source_key: u16, //VERIFY this might not be needed because the token list is now stored in the SourceManager and its source key is implicit
+source_key: u16,
 row_start: u32,
 row_end: u32,
 col_start: u32,
@@ -224,49 +224,49 @@ pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     for (KW_TABLE_1) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_2) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_3) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_4) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_5) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_6) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_7) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8);
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     for (KW_TABLE_8) |kw| {
         // const str = kw[0];
         // out[i] = (str[0] << 56) | (str[1] << 48) | (str[2] << 40) | (str[3] << 32) | (str[4] << 24) | (str[5] << 16) | (str[6] << 8) | str[7];
-        out[i] = IdentBlock.generate_keyword(kw.id, false).ident.data[0];
+        out[i] = IdentBlock.compile_keyword(kw.id, false).data[0];
         i += 1;
     }
     break :eval out;
@@ -396,7 +396,7 @@ pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8
         .truncate = true,
     });
     var row: u32 = 0;
-    const string_builder = Global.U8BufSmall.List.create();
+    var string_builder = Global.U8BufSmall.List.create();
     defer string_builder.release();
     for (tokens.slice()) |token| {
         const name = KIND_NAME[@intFromEnum(token.kind)];
@@ -420,11 +420,11 @@ pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8
                 _ = try out_file.write(string_builder.quick_fmt_string("{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(token.data_val_or_ptr)))) }));
             },
             KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
-                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.g.token_rom.data.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.token_rom.data.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
             },
             KIND.IDENT => {
-                const ident_loc = Global.g.ident_manager.ident_name_locs.ptr[token.data_val_or_ptr];
-                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.g.ident_manager.ident_buffer.ptr[ident_loc.start..ident_loc.end] }));
+                const ident_loc = Global.ident_manager.ident_name_locs.ptr[token.data_val_or_ptr];
+                _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.ident_manager.ident_buffer.ptr[ident_loc.start..ident_loc.end] }));
             },
             else => {
                 _ = try out_file.write(string_builder.quick_fmt_string("{s} ", .{name}));

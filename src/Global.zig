@@ -12,7 +12,20 @@ const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
 
 const Self = @This();
 
-pub var g: Self = undefined;
+pub var root_alloc: Allocator = undefined;
+pub var large_alloc: Allocator = undefined;
+pub var large_block_alloc: BlockAllocator = undefined;
+pub var large_alloc_concrete: LargeAlloc = undefined;
+pub var medium_alloc: Allocator = undefined;
+pub var medium_block_alloc: BlockAllocator = undefined;
+pub var medium_alloc_concrete: MediumAlloc = undefined;
+pub var small_alloc: Allocator = undefined;
+pub var small_block_alloc: BlockAllocator = undefined;
+pub var small_alloc_concrete: SmallAlloc = undefined;
+pub var ident_manager: IdentManager = undefined;
+pub var notice_manager: NoticeManager = undefined;
+pub var token_rom: ProgramROM = undefined;
+pub var source_manager: SourceManager = undefined;
 
 const LargeAlloc = PooledBlockAllocator.define(PooledBlockAllocator.Config{
     .block_size = 4096,
@@ -50,62 +63,40 @@ const SmallAlloc = PooledBlockAllocator.define(PooledBlockAllocator.Config{
     .secure_wipe_freed_memory = false,
 });
 
-root_alloc: Allocator,
-large_alloc: Allocator,
-large_block_alloc: BlockAllocator,
-large_alloc_concrete: LargeAlloc,
-medium_alloc: Allocator,
-medium_block_alloc: BlockAllocator,
-medium_alloc_concrete: MediumAlloc,
-small_alloc: Allocator,
-small_block_alloc: BlockAllocator,
-small_alloc_concrete: SmallAlloc,
-ident_manager: IdentManager,
-notice_manager: NoticeManager,
-token_rom: ProgramROM,
-source_manager: SourceManager,
+pub fn init(use_root_alloc: Allocator) void {
+    Self.root_alloc = use_root_alloc;
 
-pub fn init(root_alloc: Allocator) Self {
-    const large = LargeAlloc.new(root_alloc);
-    const large_alloc = large.allocator();
-    const large_block = large.block_allocator();
-    const medium = MediumAlloc.new(large_alloc);
-    const medium_alloc = medium.allocator();
-    const medium_block = medium.block_allocator();
-    const small = SmallAlloc.new(medium_alloc);
-    const small_alloc = small.allocator();
-    const small_block = small.block_allocator();
-    return Self{
-        .root_alloc = root_alloc,
-        .large_alloc = large_alloc,
-        .large_block_alloc = large_block,
-        .large_alloc_concrete = large,
-        .medium_alloc = medium_alloc,
-        .medium_block_alloc = medium_block,
-        .medium_alloc_concrete = medium,
-        .small_alloc = small_alloc,
-        .small_block_alloc = small_block,
-        .small_alloc_concrete = small,
-        .ident_manager = IdentManager.new(medium_alloc),
-        .notice_manager = NoticeManager.new(medium_alloc),
-        .token_rom = ProgramROM.new(medium_alloc),
-        .source_manager = SourceManager.new(large_alloc),
-    };
+    Self.large_alloc_concrete = LargeAlloc.new(Self.root_alloc);
+    Self.large_alloc = Self.large_alloc_concrete.allocator();
+    Self.large_block_alloc = Self.large_alloc_concrete.block_allocator();
+
+    Self.medium_alloc_concrete = MediumAlloc.new(Self.large_alloc);
+    Self.medium_alloc = Self.medium_alloc_concrete.allocator();
+    Self.medium_block_alloc = Self.medium_alloc_concrete.block_allocator();
+
+    Self.small_alloc_concrete = SmallAlloc.new(Self.medium_alloc);
+    Self.small_alloc = Self.small_alloc_concrete.allocator();
+    Self.small_block_alloc = Self.small_alloc_concrete.block_allocator();
+
+    Self.ident_manager = IdentManager.new();
+    Self.notice_manager = NoticeManager.new();
+    Self.token_rom = ProgramROM.new();
+    Self.source_manager = SourceManager.new();
 }
 
-pub fn cleanup(self: *Self) void {
-    self.source_manager.cleanup();
-    self.token_rom.cleanup();
-    self.notice_manager.cleanup();
-    self.ident_manager.cleanup();
-    self.small_alloc_concrete.release_all_memory();
-    self.medium_alloc_concrete.release_all_memory();
-    self.large_alloc_concrete.release_all_memory();
+pub fn cleanup() void {
+    Self.source_manager.cleanup();
+    Self.token_rom.cleanup();
+    Self.notice_manager.cleanup();
+    Self.ident_manager.cleanup();
+    Self.small_alloc_concrete.release_all_memory();
+    Self.medium_alloc_concrete.release_all_memory();
+    Self.large_alloc_concrete.release_all_memory();
 }
 
-pub const U8BufSmall = StaticAllocBuffer.define(u8, &g.small_block_alloc);
-pub const U8BufMedium = StaticAllocBuffer.define(u8, &g.medium_block_alloc);
-pub const U8BufLarge = StaticAllocBuffer.define(u8, &g.large_block_alloc);
+pub const U8BufSmall = StaticAllocBuffer.define(u8, &Self.small_block_alloc);
+pub const U8BufMedium = StaticAllocBuffer.define(u8, &Self.medium_block_alloc);
+pub const U8BufLarge = StaticAllocBuffer.define(u8, &Self.large_block_alloc);
 
 pub const BufLoc = struct {
     start: u32,
@@ -120,10 +111,10 @@ pub const BufLoc = struct {
 
     pub inline fn new_usize(start: usize, end: usize) BufLoc {
         return BufLoc{
-            .start = @as(u32, start),
-            .end = @as(u32, end),
+            .start = @intCast(start),
+            .end = @intCast(end),
         };
     }
 };
 
-pub const BufLocBufMedium = StaticAllocBuffer.define(BufLoc, &g.medium_block_alloc);
+pub const BufLocBufMedium = StaticAllocBuffer.define(BufLoc, &Self.medium_block_alloc);

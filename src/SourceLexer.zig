@@ -5,8 +5,8 @@ const Token = @import("./Token.zig");
 const TOK = Token.KIND;
 const UNI = @import("./Unicode.zig");
 const ASC = UNI.ASCII;
-const F64 = @import("./constants.zig").F64;
-const POWER_10_TABLE = @import("./constants.zig").POWER_10_TABLE;
+const F64 = @import("./Constants.zig").F64;
+const POWER_10_TABLE = @import("./Constants.zig").POWER_10_TABLE;
 const Float = @import("./ParseFloat.zig");
 const IdentBlock = @import("./IdentBlock.zig");
 const SourceReader = @import("./SourceReader.zig");
@@ -18,22 +18,23 @@ const Notice = NoticeManager.Notice;
 const IdentManager = @import("./IdentManager.zig");
 const ParseInteger = @import("./ParseInteger.zig");
 const SourceManager = @import("./SourceManager.zig");
-const ArenaAllocator = std.heap.ArenaAllocator;
-const ArenaState = ArenaAllocator.State;
 const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
-const APPEND_PANIC_MSG = @import("./Constants.zig").APPEND_PANIC_MSG;
+
+const StaticAllocBuffer = @import("./StaticAllocBuffer.zig");
+const Global = @import("./Global.zig");
 
 const ProgramROM = @import("./ProgramROM.zig");
-const ParsingAllocator = @import("./ParsingAllocator.zig");
 
 const Self = @This();
 
 reader: SourceReader,
+source_key: u16,
 token_list: Token.TokenBuf.List,
 
 pub fn new(source: []const u8, source_key: u16) Self {
     return Self{
+        .source_key = source_key,
         .reader = SourceReader.new(source_key, source),
         .token_list = Token.TokenBuf.List.create(),
     };
@@ -59,10 +60,10 @@ pub fn next_token(self: *Self) Token {
         if (start == end) break;
     }
     if (self.reader.curr.pos >= self.reader.data.len) {
-        var token = TokenBuilder.new(self.source_key, self.reader);
+        var token = TokenBuilder.new(self.source_key, &self.reader);
         return self.finish_token_kind(TOK.EOF, &token);
     }
-    var token_builder = TokenBuilder.new(self.source_key, self.reader);
+    var token_builder = TokenBuilder.new(self.source_key, &self.reader);
     var token = &token_builder;
     const byte_1 = self.reader.read_next_ascii(token);
     switch (byte_1) {
@@ -136,7 +137,7 @@ pub fn next_token(self: *Self) Token {
                     ASC.EQUALS => return self.finish_token_kind(TOK.LESS_THAN_EQUAL, token),
                     ASC.LESS_THAN => {
                         if (self.reader.data.len > self.reader.curr.pos) {
-                            const byte_3 = self.reader.read_next_ascii(SEVERITY.ERROR);
+                            const byte_3 = self.reader.read_next_ascii(token);
                             switch (byte_3) {
                                 ASC.EQUALS => return self.finish_token_kind(TOK.SHIFT_L_ASSIGN, token),
                                 else => self.reader.rollback_position(),
@@ -334,9 +335,9 @@ pub fn next_token(self: *Self) Token {
         ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
             self.reader.rollback_position();
             const ident_start = self.reader.curr.pos;
-            const ident_result = IdentBlock.parse_from_source(&self.reader, SEVERITY.ERROR);
+            const ident_result = IdentBlock.parse_from_source(&self.reader, token, false);
             const ident_end = self.reader.curr.pos;
-            if (ident_result.illegal) return self.finish_token_kind(TOK.ILLEGAL, token);
+            if (token.kind == TOK.ILLEGAL) return self.finish_token(token);
             if (ident_result.len <= Token.LONGEST_KEYWORD) {
                 for (Token.KW_U64_SLICES_BY_LEN[ident_result.len], Token.KW_TOKEN_SLICES_BY_LEN[ident_result.len], Token.KW_IMPLICIT_SLICES_BY_LEN[ident_result.len]) |keyword, kind, implicit| {
                     if (ident_result.ident.data[0] == keyword) {
@@ -345,7 +346,7 @@ pub fn next_token(self: *Self) Token {
                     }
                 }
             }
-            const ident_key = IdentManager.global.get_ident_index(ident_result.ident, self.reader.data[ident_start..ident_end]);
+            const ident_key = Global.ident_manager.get_or_create_ident_key(ident_result.ident, self.reader.data[ident_start..ident_end]);
             token.set_data(ident_key, 1, 0);
             return self.finish_token_kind(TOK.IDENT, token);
         },
@@ -372,15 +373,15 @@ fn parse_number_literal(self: *Self, token: *TokenBuilder, comptime negative: bo
     switch (peek_next) {
         ASC.b => {
             self.reader.curr.advance_one_col(1);
-            ParseInteger.parse_base2_compatable_integer(&self.reader, ParseInteger.BASE.BIN, negative);
+            ParseInteger.parse_base2_compatable_integer(ParseInteger.BASE.BIN, negative, &self.reader, token);
         },
         ASC.o => {
             self.reader.curr.advance_one_col(1);
-            ParseInteger.parse_base2_compatable_integer(&self.reader, ParseInteger.BASE.OCT, negative);
+            ParseInteger.parse_base2_compatable_integer(ParseInteger.BASE.OCT, negative, &self.reader, token);
         },
         ASC.x => {
             self.reader.curr.advance_one_col(1);
-            ParseInteger.parse_base2_compatable_integer(&self.reader, ParseInteger.BASE.HEX, negative);
+            ParseInteger.parse_base2_compatable_integer(ParseInteger.BASE.HEX, negative, &self.reader, token);
         },
         else => @panic("parsing decimal numbers not imlemented!"), // HACK just deal with the simple cases first
     }
@@ -388,58 +389,57 @@ fn parse_number_literal(self: *Self, token: *TokenBuilder, comptime negative: bo
 }
 
 fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bool) Token {
-    const program_rom = &ProgramROM.global;
+    const token_rom = &Global.token_rom;
     var kind = TOK.LIT_STRING;
-    const alloc = ParsingAllocator.global.alloc;
-    var string = List(u8){};
-    defer string.deinit(alloc);
+    var string = Global.U8BufSmall.List.create();
+    defer string.release();
     var is_escape = false;
     var has_terminal = false;
     parseloop: while (self.reader.data.len > self.reader.curr.pos) {
-        const char = self.reader.read_next_utf8_char(SEVERITY.ERROR);
+        const char = self.reader.read_next_utf8_char(token);
         switch (is_escape) {
             true => {
                 is_escape = false;
                 switch (char.code) {
                     ASC.n => {
-                        string.append(alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
+                        string.append(ASC.NEWLINE);
                     },
                     ASC.t => {
-                        string.append(alloc, ASC.H_TAB) catch @panic(APPEND_PANIC_MSG);
+                        string.append(ASC.H_TAB);
                     },
                     ASC.r => {
-                        string.append(alloc, ASC.CR) catch @panic(APPEND_PANIC_MSG);
+                        string.append(ASC.CR);
                     },
                     ASC.B_SLASH, ASC.DUBL_QUOTE, ASC.BACKTICK => {
-                        string.append(alloc, char.bytes[0]) catch @panic(APPEND_PANIC_MSG);
+                        string.append(char.bytes[0]);
                     },
                     ASC.o => {
-                        const utf8 = self.reader.read_next_n_bytes_as_octal_escape('o', 3, token);
-                        string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                        const utf8 = self.reader.read_next_n_bytes_as_octal_escape(3, token);
+                        string.append_slice(utf8.bytes[0..utf8.len]);
                     },
                     ASC.x => {
-                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape('x', 2, token);
-                        string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape(2, token);
+                        string.append_slice(utf8.bytes[0..utf8.len]);
                     },
                     ASC.u => {
-                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape('u', 4, token);
-                        string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape(4, token);
+                        string.append_slice(utf8.bytes[0..utf8.len]);
                     },
                     ASC.U => {
-                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape('U', 8, token);
-                        string.appendSlice(alloc, utf8.bytes[0..utf8.len]) catch @panic(APPEND_PANIC_MSG);
+                        const utf8 = self.reader.read_next_n_bytes_as_hex_escape(8, token);
+                        string.append_slice(utf8.bytes[0..utf8.len]);
                     },
                     else => {
                         token.attach_notice_here(NOTICE.illegal_string_escape_sequence, SEVERITY.ERROR, &self.reader);
                         kind = TOK.ILLEGAL;
-                        string.appendSlice(alloc, UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]) catch @panic(APPEND_PANIC_MSG);
+                        string.append_slice(UNI.REP_CHAR_BYTES[0..UNI.REP_CHAR_LEN]);
                     },
                 }
             },
             else => {
                 switch (char.code) {
                     ASC.NEWLINE => {
-                        string.append(alloc, ASC.NEWLINE) catch @panic(APPEND_PANIC_MSG);
+                        string.append(ASC.NEWLINE);
                         self.reader.skip_whitespace_except_newline();
                         if (self.reader.data.len > self.reader.curr.pos) {
                             const next_byte = self.reader.read_next_ascii(token);
@@ -467,7 +467,7 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
                         break :parseloop;
                     },
                     else => {
-                        string.appendSlice(alloc, char.bytes[0..char.len]) catch @panic(APPEND_PANIC_MSG);
+                        string.append_slice(char.bytes[0..char.len]);
                     },
                 }
             },
@@ -477,24 +477,24 @@ fn collect_string(self: *Self, token: *TokenBuilder, comptime needs_terminal: bo
         token.attach_notice_here(NOTICE.source_ended_before_string_terminated, SEVERITY.ERROR, &self.reader);
         return self.finish_token_kind(TOK.ILLEGAL, token);
     }
-    program_rom.prepare_space_for_write(string.items.len, 1);
-    const ptr = program_rom.len;
-    program_rom.write_slice(u8, string.items);
-    token.set_data(ptr, @intCast(string.items.len), 0);
+    token_rom.prepare_space_for_write(string.len, 1);
+    const ptr = token_rom.data.len;
+    token_rom.write_slice(u8, string.slice());
+    token.set_data(ptr, @intCast(string.len), 0);
     return self.finish_token_kind(TOK.LIT_STRING, token);
 }
 
 fn finish_token(self: *Self, token: *TokenBuilder) Token {
     if (token.has_notice) {
         const notice = token.extract_notice(&self.reader);
-        NoticeManager.global.add_notice(notice);
+        Global.notice_manager.add_notice(notice);
     }
     return Token{
         .kind = token.kind,
         .source_key = token.source_key,
-        .row_start = token.start_row,
+        .row_start = token.start_loc.row,
         .row_end = self.reader.curr.row,
-        .col_start = token.start_col,
+        .col_start = token.start_loc.col,
         .col_end = self.reader.curr.col,
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
@@ -505,14 +505,14 @@ fn finish_token(self: *Self, token: *TokenBuilder) Token {
 fn finish_token_kind(self: *Self, kind: TOK, token: *TokenBuilder) Token {
     if (token.has_notice) {
         const notice = token.extract_notice(&self.reader);
-        NoticeManager.global.add_notice(notice);
+        Global.notice_manager.add_notice(notice);
     }
     return Token{
         .kind = kind,
         .source_key = token.source_key,
-        .row_start = token.start_row,
+        .row_start = token.start_loc.row,
         .row_end = self.reader.curr.row,
-        .col_start = token.start_col,
+        .col_start = token.start_loc.col,
         .col_end = self.reader.curr.col,
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
@@ -521,16 +521,16 @@ fn finish_token_kind(self: *Self, kind: TOK, token: *TokenBuilder) Token {
 }
 
 fn finish_token_generic_illegal(self: *Self, token: *TokenBuilder) Token {
-    token.kind - TOK.ILLEGAL;
+    token.kind = TOK.ILLEGAL;
     token.attach_notice_here(NOTICE.generic_illegal_token, SEVERITY.ERROR, &self.reader);
     const notice = token.extract_notice(&self.reader);
-    NoticeManager.global.add_notice(notice);
+    Global.notice_manager.add_notice(notice);
     return Token{
         .kind = token.kind,
         .source_key = token.source_key,
-        .row_start = token.start_row,
+        .row_start = token.start_loc.row,
         .row_end = self.reader.curr.row,
-        .col_start = token.start_col,
+        .col_start = token.start_loc.col,
         .col_end = self.reader.curr.col,
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
@@ -557,7 +557,7 @@ pub const TokenBuilder = struct {
         return TokenBuilder{
             .source_key = source_key,
             .kind = TOK.ILLEGAL,
-            .start_loc = source.curr.pos,
+            .start_loc = source.curr,
             .data_val_or_ptr = 0,
             .data_len = 0,
             .data_extra = 0,
