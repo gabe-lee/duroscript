@@ -398,6 +398,7 @@ pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8
     var row: u32 = 0;
     var string_builder = Global.U8BufSmall.List.create();
     defer string_builder.release();
+    std.debug.print("token_list len = {d}", .{tokens.len});
     for (tokens.slice()) |token| {
         const name = KIND_NAME[@intFromEnum(token.kind)];
         while (token.row_start > row) {

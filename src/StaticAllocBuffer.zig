@@ -193,7 +193,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// For a slice with an exact length, you can re-slice the result, or use
             /// `.resize_exact(exact_len)`
             pub fn resize_minimum(self: *Slice, new_min_len: usize) bool {
-                if (self.len == 0 or self.ptr == BLANK_PTR) {
+                if (self.len == 0 or self.cap == 0 or self.ptr == BLANK_PTR) {
                     if (new_min_len == 0) {
                         return true;
                     }
@@ -401,8 +401,8 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// This operation sets this slice to an empty state
             pub fn downgrade_into_slice_partial(self: *List) Slice {
                 var q_slice = self.to_quick_slice();
-                self.* = BLANK_LIST;
                 _ = q_slice.resize_exact(self.len);
+                self.* = BLANK_LIST;
                 return q_slice;
             }
 
@@ -448,13 +448,13 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 assert(idx <= self.len);
                 const new_min_len = self.len + count;
 
-                if (self.cap >= new_min_len)
-                    return self.insert_slots_assume_capacity(idx, count);
-
-                var q_slice = self.to_quick_slice();
-                if (q_slice.resize_minimum_no_move(new_min_len)) {
-                    self.from_quick_slice(q_slice);
-                    return self.insert_slots_assume_capacity(idx, count);
+                if (self.cap >= new_min_len) return self.insert_slots_assume_capacity(idx, count);
+                if (self.ptr != BLANK_PTR and self.cap != 0 and self.len != 0) {
+                    var q_slice = self.to_quick_slice();
+                    if (q_slice.resize_minimum_no_move(new_min_len)) {
+                        self.from_quick_slice(q_slice);
+                        return self.insert_slots_assume_capacity(idx, count);
+                    }
                 }
 
                 const new_slice = Slice.create_minimum(new_min_len);
@@ -905,6 +905,17 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                 const q_slice = Slice{
                     .ptr = self.ptr,
                     .len = self.cap,
+                };
+                return q_slice;
+            }
+
+            /// Same as `downgrade_into_slice_partial()` but does not erase this list's pointer or size
+            ///
+            /// Unsafe is misused
+            inline fn to_quick_slice_partial(self: *List) Slice {
+                const q_slice = Slice{
+                    .ptr = self.ptr,
+                    .len = self.len,
                 };
                 return q_slice;
             }

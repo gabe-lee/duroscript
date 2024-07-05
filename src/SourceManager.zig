@@ -71,12 +71,14 @@ pub fn advance_source_to_loaded(self: *Self, key: u16) void {
     const source = self.stage_list.ptr[key];
     if (@intFromEnum(source) >= @intFromEnum(STATE.LOADED)) return;
     var data = source.UNOPENED;
+
     const file = std.fs.openFileAbsolute(self.path_pool.ptr[data.file_path_loc.start..data.file_path_loc.end], OpenFlags{ .mode = OpenMode.read_only }) catch @panic("FAILED TO LOAD FILE");
     defer file.close();
     const file_stat: ?std.fs.File.Stat = file.stat() catch null;
     if (file_stat) |stat| {
         const file_size = stat.size;
         _ = data.file_reader.ensure_unused_cap(@as(usize, file_size));
+        data.file_reader.grow_len_to_cap();
         const real_len = file.readAll(data.file_reader.slice()) catch @panic("FAILED TO READ FILE CONTENTS");
         assert(real_len <= data.file_reader.cap);
         data.file_reader.len = real_len;
@@ -85,6 +87,7 @@ pub fn advance_source_to_loaded(self: *Self, key: u16) void {
         var cont = true;
         while (cont) {
             _ = data.file_reader.ensure_unused_cap(block_size);
+            data.file_reader.grow_len_to_cap();
             const read_len = file.read(data.file_reader.ptr[data.file_reader.len..data.file_reader.cap]) catch @panic("FAILED TO READ FILE CONTENTS");
             data.file_reader.len += read_len;
             cont = read_len != 0;
@@ -106,6 +109,7 @@ pub fn advance_source_to_lexed(self: *Self, key: u16) void {
     self.advance_source_to_loaded(key);
     var data = self.stage_list.ptr[key].LOADED;
     data.source_lexer.parse_source();
+
     self.stage_list.ptr[key] = SourceStage{
         .LEXED = .{
             .token_list = data.source_lexer.token_list.downgrade_into_slice_partial(),

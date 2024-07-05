@@ -200,6 +200,8 @@ const SpanState = enum(u2) {
     ASSIGNED_FREE,
     /// MemSpan represents used memory
     ASSIGNED_USED,
+    /// MemSpan is not in any list (in-between operations)
+    NONE,
 };
 
 const MAX_ALIGN = std.mem.page_size;
@@ -486,8 +488,8 @@ pub fn define(comptime config: Config) type {
         ///
         /// Stops when free memory is below the max threshold or free list is exhausted
         pub fn shrink_if_possible(self: *Self, threshold: ShrinkThreshold) void {
-            self.debug_trace_open("shrink_if_possible", ""); // DEBUG
-            defer self.debug_trace_close("shrink_if_possible"); // DEBUG
+            self.SUPER_DEBUG_trace_open("shrink_if_possible", ""); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("shrink_if_possible"); // DEBUG
             @setCold(true);
             var curr_free = self.first_free_span;
             var is_above_threshold = self.is_above_custom_max_shrink_threshold(threshold);
@@ -589,23 +591,20 @@ pub fn define(comptime config: Config) type {
         }
 
         fn split_free_span(self: *Self, span_idx: T_IDX, first_len: T_IDX) T_IDX_or_OptionalT_IDX {
-            self.debug_trace_open("split_free_span", prnt_inpt("span_idx: {d}, first_len: {d}", .{ span_idx, first_len })); // DEBUG
-            defer self.debug_trace_close("split_free_span"); // DEBUG
+            self.SUPER_DEBUG_trace_open("split_free_span", prnt_inpt("span_idx: {d}, first_len: {d}", .{ span_idx, first_len })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("split_free_span"); // DEBUG
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span_idx].block_len > first_len and first_len > 0, DEBUG_ATTEMPT_TO_SPLIT_SPAN_ONE_WITH_ZERO_BLOCKS);
             self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(span_idx, .ASSIGNED_FREE); //DEBUG
             debug_assert(self.span_list[span_idx].state == .ASSIGNED_FREE, DEBUG_ATTEMPT_TO_SPLIT_SPAN_NOT_FREE);
-            const second_idx = self.claim_unassigned_span();
+            const second_idx = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) (self.claim_unassigned_span() orelse return null) else self.claim_unassigned_span();
             self.span_list[second_idx].prev_logical = span_idx;
             self.span_list[second_idx].next_logical = self.span_list[span_idx].next_logical;
             self.span_list[span_idx].next_logical = second_idx;
             self.span_list[second_idx].mem_ptr = self.span_list[span_idx].mem_ptr + (@as(usize, first_len) << LOG2_OF_BLOCK_SIZE);
             self.span_list[second_idx].block_len = self.span_list[span_idx].block_len - first_len;
             self.span_list[span_idx].block_len = first_len;
-            self.span_list[second_idx].next_same_state_ll = self.first_free_span;
-            self.span_list[self.first_free_span].prev_same_state_ll = second_idx;
-            self.span_list[second_idx].prev_same_state_ll = NO_IDX;
-            self.first_free_span = second_idx;
+            self.add_span_to_begining_of_linked_list(second_idx, .ASSIGNED_FREE);
             return second_idx;
         }
 
@@ -618,8 +617,8 @@ pub fn define(comptime config: Config) type {
         }
 
         fn free_used_span(self: *Self, span_idx: T_IDX) void {
-            self.debug_trace_open("free_used_span", prnt_inpt("span_idx: {d}", .{span_idx})); // DEBUG
-            defer self.debug_trace_close("free_used_span"); // DEBUG
+            self.SUPER_DEBUG_trace_open("free_used_span", prnt_inpt("span_idx: {d}", .{span_idx})); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("free_used_span"); // DEBUG
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span_idx].state == .ASSIGNED_USED, DEBUG_ATTEMPT_TO_FREE_NON_USED_SPAN);
             // Remove span from used list and add it to free list with free state
@@ -688,7 +687,7 @@ pub fn define(comptime config: Config) type {
                 .prev_same_state_ll = NO_IDX,
                 .next_logical = NO_IDX,
                 .prev_logical = NO_IDX,
-                .state = .UNASSIGNED,
+                .state = .NONE,
             };
             const idx = self.span_list_len;
             self.span_list_len += 1;
@@ -710,7 +709,7 @@ pub fn define(comptime config: Config) type {
                 .prev_same_state_ll = NO_IDX,
                 .next_logical = NO_IDX,
                 .prev_logical = NO_IDX,
-                .state = .ASSIGNED_FREE,
+                .state = .NONE,
             };
             const idx = self.span_list_len;
             self.span_list_len += 1;
@@ -732,7 +731,7 @@ pub fn define(comptime config: Config) type {
                 .prev_same_state_ll = NO_IDX,
                 .next_logical = NO_IDX,
                 .prev_logical = NO_IDX,
-                .state = .ASSIGNED_USED,
+                .state = .NONE,
             };
             const idx = self.span_list_len;
             self.span_list_len += 1;
@@ -794,12 +793,13 @@ pub fn define(comptime config: Config) type {
                 debug_assert(self.span_list[next_next_logical].mem_ptr == self.span_list[span_idx].mem_ptr + (@as(usize, self.span_list[span_idx].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
                 self.span_list[next_next_logical].prev_logical = span_idx;
             }
+            self.remove_span_from_its_linked_list(next_logical, .ASSIGNED_FREE);
             return next_logical;
         }
 
         fn release_span_to_backing_or_os(self: *Self, span: T_IDX) void {
-            self.debug_trace_open("release_span_to_backing_or_os", prnt_inpt("span: {d}", .{span})); // DEBUG
-            defer self.debug_trace_close("release_span_to_backing_or_os"); // DEBUG
+            self.SUPER_DEBUG_trace_open("release_span_to_backing_or_os", prnt_inpt("span: {d}", .{span})); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("release_span_to_backing_or_os"); // DEBUG
             debug_assert(self.span_list[span].prev_logical == NO_IDX and self.span_list[span].next_logical == NO_IDX, DEBUG_RELEASE_NON_FREE_SPAN);
             debug_assert(self.span_list[span].state == .ASSIGNED_FREE, DEBUG_RELEASE_NON_FREE_SPAN);
             const total_blocks = self.span_list[span].block_len;
@@ -812,20 +812,23 @@ pub fn define(comptime config: Config) type {
         }
 
         fn claim_unassigned_span(self: *Self) T_IDX_or_OptionalT_IDX {
-            self.debug_trace_open("claim_unassigned_span", ""); // DEBUG
-            defer self.debug_trace_close("claim_unassigned_span"); // DEBUG
+            self.SUPER_DEBUG_trace_open("claim_unassigned_span", ""); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("claim_unassigned_span"); // DEBUG
+
             // Use existing unassigned span if possible
             if (self.first_unassigned_span != NO_IDX) {
                 debug_assert(self.first_unassigned_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
                 const claimed_idx = self.first_unassigned_span;
                 self.remove_span_from_its_linked_list(claimed_idx, .UNASSIGNED);
-                self.debug_trace_extra("took first unassigned span"); // DEBUG
+                self.SUPER_DEBUG_trace_extra("took first unassigned span"); // DEBUG
+                self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
                 return claimed_idx;
             }
             // Just add a new unassigned span if space in span list exists
             if (self.span_list_len < self.span_list_cap) {
                 const claimed_idx = self.add_unassigned_span_but_not_to_list();
-                self.debug_trace_extra("added new blank span to end of list"); // DEBUG
+                self.SUPER_DEBUG_trace_extra("added new blank span to end of list"); // DEBUG
+                self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
                 return claimed_idx;
             }
             // If span_pool is not at end of logical allocation and has a free span after it that can hold the extra needed blocks,
@@ -839,13 +842,16 @@ pub fn define(comptime config: Config) type {
                         if (self.span_list[next_logical].block_len == 1) {
                             const claimed_idx = self.merge_next_logical_free_into_this_used_span(self.span_list_idx);
                             self.update_span_list_cap();
-                            self.debug_trace_extra("found next-logical span with 1 free block"); // DEBUG
+                            self.SUPER_DEBUG_trace_extra("found next-logical span with 1 free block"); // DEBUG
+                            self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
                             return claimed_idx;
                         } else {
                             self.shift_blocks_from_next_logical_free_into_this_used_span(self.span_list_idx, 1);
                             self.update_span_list_cap();
-                            self.debug_trace_extra("found next-logical span with >1 free block"); // DEBUG
-                            return self.add_unassigned_span_but_not_to_list();
+                            self.SUPER_DEBUG_trace_extra("found next-logical span with >1 free block"); // DEBUG
+                            const claimed_idx = self.add_unassigned_span_but_not_to_list();
+                            self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
+                            return claimed_idx;
                         }
                     }
                 } else {
@@ -872,7 +878,8 @@ pub fn define(comptime config: Config) type {
                         }
                         const claimed_idx = self.add_unassigned_span_but_not_to_list();
                         debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
-                        self.debug_trace_extra("expanded pool span IN-PLACE using backing allocator"); // DEBUG
+                        self.SUPER_DEBUG_trace_extra("expanded pool span IN-PLACE using backing allocator"); // DEBUG
+                        self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
                         return claimed_idx;
                     }
                 }
@@ -900,13 +907,14 @@ pub fn define(comptime config: Config) type {
             }
             const claimed_idx = self.add_unassigned_span_but_not_to_list();
             debug_assert(self.span_list_cap >= self.span_list_len, DEBUG_EXPANDING_SPAN_POOL_MADE_CAP_LESS_THAN_LEN);
-            self.debug_trace_extra("allocated a brand new span from the backing allocator"); // DEBUG
+            self.SUPER_DEBUG_trace_extra("allocated a brand new span from the backing allocator"); // DEBUG
+            defer self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(claimed_idx, .NONE); //DEBUG
             return claimed_idx;
         }
 
         fn collect_entire_logical_span_from_last(self: *Self, last_span_idx: T_IDX) MemSpanLogical {
-            self.debug_trace_open("collect_entire_logical_span_from_last", prnt_inpt("last_span_idx: {d}", .{last_span_idx})); // DEBUG
-            defer self.debug_trace_close("collect_entire_logical_span_from_last"); // DEBUG
+            self.SUPER_DEBUG_trace_open("collect_entire_logical_span_from_last", prnt_inpt("last_span_idx: {d}", .{last_span_idx})); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("collect_entire_logical_span_from_last"); // DEBUG
             debug_assert(self.span_list[last_span_idx].next_logical == NO_IDX, DEBUG_COLLECT_LOGICAL_FROM_END_SPAN_WASNT_LAST);
             var total_blocks = self.span_list[last_span_idx].block_len;
             var first_ptr = self.span_list[last_span_idx].mem_ptr;
@@ -925,10 +933,10 @@ pub fn define(comptime config: Config) type {
         }
 
         fn remove_span_from_its_linked_list(self: *Self, span_idx: T_IDX, comptime list: SpanState) void {
-            self.debug_trace_open("remove_span_from_its_linked_list", prnt_inpt("span: {d}, list: {s}", .{ span_idx, @tagName(list) })); // DEBUG
-            defer self.debug_trace_close("remove_span_from_its_linked_list"); // DEBUG
+            self.SUPER_DEBUG_trace_open("remove_span_from_its_linked_list", prnt_inpt("span: {d}, list: {s}", .{ span_idx, @tagName(list) })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("remove_span_from_its_linked_list"); // DEBUG
             self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(span_idx, list); //DEBUG
-            // debug_assert(self.span_list[span_idx].state == list, DEBUG_ATTEMPT_TO_REMOVE_SPAN_NOT_PART_OF_LIST);
+            debug_assert(self.span_list[span_idx].state == list, DEBUG_ATTEMPT_TO_REMOVE_SPAN_NOT_PART_OF_LIST);
             const next_same_state = self.span_list[span_idx].next_same_state_ll;
             debug_assert(next_same_state == NO_IDX or next_same_state < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             if (next_same_state != NO_IDX) {
@@ -951,37 +959,53 @@ pub fn define(comptime config: Config) type {
                     debug_assert(self.first_unassigned_span == span_idx, DEBUG_SPAN_WITH_NO_IDX_PREV_ISNT_FIRST_IN_LL);
                     self.first_unassigned_span = self.span_list[span_idx].next_same_state_ll;
                 },
+                .NONE => unreachable,
             }
+            self.span_list[span_idx].state = .NONE;
+            self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(span_idx, .NONE); //DEBUG
+            return;
         }
 
         fn add_span_to_begining_of_linked_list(self: *Self, span_idx: T_IDX, comptime list: SpanState) void {
-            self.debug_trace_open("add_span_to_begining_of_linked_list", prnt_inpt("span: {d}, list: {s}", .{ span_idx, @tagName(list) })); // DEBUG
-            defer self.debug_trace_close("add_span_to_begining_of_linked_list"); // DEBUG
+            self.SUPER_DEBUG_trace_open("add_span_to_begining_of_linked_list", prnt_inpt("span: {d}, list: {s}", .{ span_idx, @tagName(list) })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("add_span_to_begining_of_linked_list"); // DEBUG
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
-            // debug_assert(self.span_list[span_idx].state != list, DEBUG_ATTEMPT_TO_ADD_SPAN_ALREADY_PART_OF_LIST);
+            debug_assert(self.span_list[span_idx].state != list, DEBUG_ATTEMPT_TO_ADD_SPAN_ALREADY_PART_OF_LIST);
+            debug_assert(self.span_list[span_idx].state == .NONE, DEBUG_ATTEMPT_TO_ADD_SPAN_ALREADY_PART_OF_LIST);
+            self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(span_idx, .NONE); //DEBUG
 
             self.span_list[span_idx].state = list;
             self.span_list[span_idx].prev_same_state_ll = NO_IDX;
             switch (list) {
                 .ASSIGNED_FREE => {
                     self.span_list[span_idx].next_same_state_ll = self.first_free_span;
+                    if (self.first_free_span != NO_IDX) {
+                        self.span_list[self.first_free_span].prev_same_state_ll = span_idx;
+                    }
                     self.first_free_span = span_idx;
                 },
                 .ASSIGNED_USED => {
                     self.span_list[span_idx].next_same_state_ll = self.first_used_span;
+                    if (self.first_used_span != NO_IDX) {
+                        self.span_list[self.first_used_span].prev_same_state_ll = span_idx;
+                    }
                     self.first_used_span = span_idx;
                 },
                 .UNASSIGNED => {
                     self.span_list[span_idx].next_same_state_ll = self.first_unassigned_span;
+                    if (self.first_unassigned_span != NO_IDX) {
+                        self.span_list[self.first_unassigned_span].prev_same_state_ll = span_idx;
+                    }
                     self.first_unassigned_span = span_idx;
                 },
+                .NONE => unreachable,
             }
             self.SUPER_DEBUG_assert_idx_in_exactly_one_list_exactly_one_time(span_idx, list); //DEBUG
         }
 
         fn assign_span_to_allocation(self: *Self, span: T_IDX, ptr: [*]u8, blocks: T_IDX) void {
-            self.debug_trace_open("assign_span_to_allocation", prnt_inpt("span: {d}, blocks: {d}", .{ span, blocks })); // DEBUG
-            defer self.debug_trace_close("assign_span_to_allocation"); // DEBUG
+            self.SUPER_DEBUG_trace_open("assign_span_to_allocation", prnt_inpt("span: {d}, blocks: {d}", .{ span, blocks })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("assign_span_to_allocation"); // DEBUG
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             self.span_list[span].block_len = blocks;
             self.span_list[span].mem_ptr = ptr;
@@ -990,8 +1014,8 @@ pub fn define(comptime config: Config) type {
         }
 
         fn assign_span_to_next_logical(self: *Self, first_span: T_IDX, next_span: T_IDX, next_size: T_IDX) void {
-            self.debug_trace_open("assign_span_to_next_logical", prnt_inpt("first_span: {d}, next_span: {d}, next_size: {d}", .{ first_span, next_span, next_size })); // DEBUG
-            defer self.debug_trace_close("assign_span_to_next_logical"); // DEBUG
+            self.SUPER_DEBUG_trace_open("assign_span_to_next_logical", prnt_inpt("first_span: {d}, next_span: {d}, next_size: {d}", .{ first_span, next_span, next_size })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("assign_span_to_next_logical"); // DEBUG
             debug_assert(first_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(next_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             self.span_list[next_span].block_len = next_size;
@@ -1010,14 +1034,15 @@ pub fn define(comptime config: Config) type {
         /// Locates the memory span that contains the base pointer of the slice. Assumes slice WAS allocated from this allocator
         /// AND is in the used span list AND has the same block-length as originally supplied, any other condition is considered
         /// a non-recoverable error (panic/unreachable)
-        fn find_used_span_from_ptr_check_size(self: *Self, ptr: [*]u8, blocks: T_IDX) T_IDX {
-            self.debug_trace_open("find_used_span_from_ptr_check_size", ""); // DEBUG
-            defer self.debug_trace_close("find_used_span_from_ptr_check_size"); // DEBUG
+        fn find_used_span_from_ptr(self: *Self, ptr: [*]u8, blocks: T_IDX) T_IDX {
+            self.SUPER_DEBUG_trace_open("find_used_span_from_ptr_check_size", ""); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("find_used_span_from_ptr_check_size"); // DEBUG
             var curr_used_span = self.first_used_span;
             debug_assert(curr_used_span == NO_IDX or curr_used_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             while (curr_used_span != NO_IDX) {
                 debug_assert(curr_used_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
                 if (self.span_list[curr_used_span].mem_ptr == ptr) {
+                    std.debug.print("\nfind_used_span_from_ptr()\nexp_blocks = {d}\ngot_blocks = {d}\n", .{ self.span_list[curr_used_span].block_len, blocks }); //DEBUG
                     user_assert(self.span_list[curr_used_span].block_len == blocks, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
                     return curr_used_span;
                 }
@@ -1030,8 +1055,8 @@ pub fn define(comptime config: Config) type {
         /// and grows spans in-place from backing allocator if possible and no existing free span was found. Returns
         /// `NO_IDX` if neither option worked
         fn try_claim_free_span(self: *Self, needed_blocks: T_IDX) T_IDX {
-            self.debug_trace_open("try_claim_free_span", prnt_inpt("needed_blocks: {d}", .{needed_blocks})); // DEBUG
-            defer self.debug_trace_close("try_claim_free_span"); // DEBUG
+            self.SUPER_DEBUG_trace_open("try_claim_free_span", prnt_inpt("needed_blocks: {d}", .{needed_blocks})); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("try_claim_free_span"); // DEBUG
             debug_assert(needed_blocks > 0, DEBUG_ATTEMPT_TO_FIND_ZERO_BYTES);
             debug_assert(self.first_free_span == NO_IDX or self.first_free_span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             var curr_free_span_idx = self.first_free_span;
@@ -1044,7 +1069,7 @@ pub fn define(comptime config: Config) type {
                     self.remove_span_from_its_linked_list(curr_free_span_idx, .ASSIGNED_FREE);
                     self.add_span_to_begining_of_linked_list(curr_free_span_idx, .ASSIGNED_USED);
                     self.free_mem_blocks -= self.span_list[curr_free_span_idx].block_len;
-                    self.debug_trace_extra("found existing free span"); //DEBUG
+                    self.SUPER_DEBUG_trace_extra("found existing free span"); //DEBUG
                     return curr_free_span_idx;
                 }
                 curr_free_span_idx = self.span_list[curr_free_span_idx].next_same_state_ll;
@@ -1062,18 +1087,18 @@ pub fn define(comptime config: Config) type {
                     self.remove_span_from_its_linked_list(curr_free_span_idx, .ASSIGNED_FREE);
                     self.add_span_to_begining_of_linked_list(curr_free_span_idx, .ASSIGNED_USED);
                     self.free_mem_blocks -= self.span_list[curr_free_span_idx].block_len;
-                    self.debug_trace_extra("grew free span IN-PLACE using backing allocator"); //DEBUG
+                    self.SUPER_DEBUG_trace_extra("grew free span IN-PLACE using backing allocator"); //DEBUG
                     return curr_free_span_idx;
                 }
                 curr_free_span_idx = self.span_list[curr_free_span_idx].next_same_state_ll;
             }
-            self.debug_trace_extra("could not find free span"); //DEBUG
+            self.SUPER_DEBUG_trace_extra("could not find free span"); //DEBUG
             return NO_IDX;
         }
 
         fn shrink_used_span(self: *Self, span_idx: T_IDX, new_size: T_IDX) Void_or_OptionalVoid {
-            self.debug_trace_open("shrink_used_span", prnt_inpt("span_idx: {d}, new_size: {d}", .{ span_idx, new_size })); // DEBUG
-            defer self.debug_trace_close("shrink_used_span"); // DEBUG
+            self.SUPER_DEBUG_trace_open("shrink_used_span", prnt_inpt("span_idx: {d}, new_size: {d}", .{ span_idx, new_size })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("shrink_used_span"); // DEBUG
             debug_assert(new_size > 0, DEBUG_SHRINK_USED_TO_ZERO_MEANS_FREE);
             debug_assert(self.span_list[span_idx].block_len >= new_size, DEBUG_SHRINK_ACTUALLY_SAME_OR_GROW);
             debug_assert(span_idx < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
@@ -1097,8 +1122,8 @@ pub fn define(comptime config: Config) type {
         }
 
         fn try_grow_used_in_place_this_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
-            self.debug_trace_open("try_grow_used_in_place_this_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
-            defer self.debug_trace_close("try_grow_used_in_place_this_alloc"); // DEBUG
+            self.SUPER_DEBUG_trace_open("try_grow_used_in_place_this_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("try_grow_used_in_place_this_alloc"); // DEBUG
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span].state == .ASSIGNED_USED, DEBUG_GROW_FREE_SPAN_IN_HOUSE);
             const next = self.span_list[span].next_logical;
@@ -1107,18 +1132,12 @@ pub fn define(comptime config: Config) type {
                 if (self.span_list[next].state == .ASSIGNED_FREE) {
                     debug_assert(self.span_list[next].block_len != 0, DEBUG_FOUND_FREE_OR_USED_SPAN_WITH_ZERO_BLOCKS);
                     if (self.span_list[next].block_len == grow_delta) {
-                        self.span_list[span].next_logical = self.span_list[next].next_logical;
-                        self.span_list[span].block_len += self.span_list[next].block_len;
-                        self.remove_span_from_its_linked_list(next, .ASSIGNED_FREE);
-                        self.add_span_to_begining_of_linked_list(next, .UNASSIGNED);
-                        self.free_mem_blocks -= grow_delta;
+                        const old_span = self.merge_next_logical_free_into_this_used_span(span);
+                        self.add_span_to_begining_of_linked_list(old_span, .UNASSIGNED);
                         return true;
                     }
                     if (self.span_list[next].block_len > grow_delta) {
-                        self.span_list[span].block_len += grow_delta;
-                        self.span_list[next].block_len -= grow_delta;
-                        self.free_mem_blocks -= grow_delta;
-                        self.span_list[next].mem_ptr += (@as(usize, grow_delta) << LOG2_OF_BLOCK_SIZE);
+                        self.shift_blocks_from_next_logical_free_into_this_used_span(span, grow_delta);
                         return true;
                     }
                 }
@@ -1127,8 +1146,8 @@ pub fn define(comptime config: Config) type {
         }
 
         fn try_grow_free_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
-            self.debug_trace_open("try_grow_free_in_place_backing_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
-            defer self.debug_trace_close("try_grow_free_in_place_backing_alloc"); // DEBUG
+            self.SUPER_DEBUG_trace_open("try_grow_free_in_place_backing_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("try_grow_free_in_place_backing_alloc"); // DEBUG
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span].state == .ASSIGNED_FREE, DEBUG_GROW_FREE_FROM_BACKING_NOT_FREE);
             const next = self.span_list[span].next_logical;
@@ -1148,8 +1167,8 @@ pub fn define(comptime config: Config) type {
         }
 
         fn try_grow_used_in_place_backing_alloc(self: *Self, span: T_IDX, grow_delta: T_IDX) bool {
-            self.debug_trace_open("try_grow_used_in_place_backing_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
-            defer self.debug_trace_close("try_grow_used_in_place_backing_alloc"); // DEBUG
+            self.SUPER_DEBUG_trace_open("try_grow_used_in_place_backing_alloc", prnt_inpt("span idx: {d}, grow_blocks: {d}", .{ span, grow_delta })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("try_grow_used_in_place_backing_alloc"); // DEBUG
             debug_assert(span < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             debug_assert(self.span_list[span].state == .ASSIGNED_USED, DEBUG_GROW_USED_FROM_BACKING_NOT_USED);
             const next = self.span_list[span].next_logical;
@@ -1181,8 +1200,8 @@ pub fn define(comptime config: Config) type {
         fn raw_alloc(self_opaque: *anyopaque, bytes: usize, log2_of_align: u8, ret_addr: usize) ?[]u8 {
             _ = ret_addr;
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            self.debug_trace_open("raw_alloc", ""); // DEBUG
-            defer self.debug_trace_close("raw_alloc"); // DEBUG
+            self.SUPER_DEBUG_trace_open("raw_alloc", prnt_inpt("blocks = {d}", .{bytes_to_blocks(bytes)})); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("raw_alloc"); // DEBUG
             const blocks = bytes_to_blocks(bytes);
             user_assert(bytes > 0, USER_ERROR_REQUESTED_ALLOCATE_ZERO_BYTES);
             user_assert(self.total_mem_blocks + blocks <= math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
@@ -1193,8 +1212,8 @@ pub fn define(comptime config: Config) type {
                 return self.span_list[existing_free_span].mem_ptr[0..real_bytes];
             }
             const new_alloc_span_idx = if (ALLOC_ERROR == AllocErrorBehavior.RETURNS) self.claim_unassigned_span() orelse return null else self.claim_unassigned_span();
-            const backing_blocks = blocks_to_backing_blocks(blocks);
-            const backing_bytes = backing_blocks_to_bytes(backing_blocks);
+            const backing_blocks = align_blocks_to_backing_blocks(blocks);
+            const backing_bytes = blocks_to_bytes(backing_blocks);
             user_assert(self.total_mem_blocks + backing_blocks <= std.math.maxInt(T_IDX), USER_ERROR_REQUESTED_ALLOCATION_GREATER_THAN_MAX_POSSIBLE);
             const new_alloc_ptr = self.backing_alloc.rawAlloc(backing_bytes, LOG2_OF_BLOCK_SIZE, 0) orelse switch (ALLOC_ERROR) {
                 .RETURNS => {
@@ -1220,20 +1239,21 @@ pub fn define(comptime config: Config) type {
         fn raw_resize(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, new_size: usize, ret_addr: usize) ?usize {
             _ = ret_addr;
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            self.debug_trace_open("raw_resize", ""); // DEBUG
-            defer self.debug_trace_close("raw_resize"); // DEBUG
+            self.SUPER_DEBUG_trace_open("raw_resize", prnt_inpt("old_blocks = {d}, new_blocks = {d}", .{ bytes_to_blocks(slice.len), bytes_to_blocks(new_size) })); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("raw_resize"); // DEBUG
             const slice_blocks = bytes_to_blocks(slice.len);
             const new_blocks = bytes_to_blocks(new_size);
+            std.debug.print("RAW_RESIZE", .{}); //DEBUG
             user_assert(slice.len > 0, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
             user_assert(new_size > 0, USER_ERROR_REQUESTED_RESIZE_ZERO_BYTES);
             user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
             if (new_blocks == slice_blocks) {
                 if (should_user_assert()) {
-                    _ = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+                    _ = self.find_used_span_from_ptr(slice.ptr, slice_blocks);
                 }
                 return blocks_to_bytes(new_blocks);
             }
-            const mem_span = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+            const mem_span = self.find_used_span_from_ptr(slice.ptr, slice_blocks);
             if (new_blocks < slice_blocks) {
                 self.shrink_used_span(mem_span, new_blocks);
                 return blocks_to_bytes(new_blocks);
@@ -1251,70 +1271,87 @@ pub fn define(comptime config: Config) type {
         fn raw_free(self_opaque: *anyopaque, slice: []u8, log2_of_align: u8, ret_addr: usize) void {
             _ = ret_addr;
             const self: *Self = @ptrCast(@alignCast(self_opaque));
-            self.debug_trace_open("raw_free", ""); // DEBUG
-            defer self.debug_trace_close("raw_free"); // DEBUG
+            self.SUPER_DEBUG_trace_open("raw_free", ""); // DEBUG
+            defer self.SUPER_DEBUG_trace_close("raw_free"); // DEBUG
             user_assert(slice.len > 0, USER_ERROR_SUPPLIED_MEM_SLICE_DIFFERENT_SIZE_THAN_ORIGINALLY_GIVEN);
             user_assert(log2_of_align <= LOG2_OF_BLOCK_SIZE, USER_ERROR_REQUESTED_ALIGNMENT_GREATER_THAN_BLOCK_SIZE);
             const slice_blocks = bytes_to_blocks(slice.len);
-            const mem_span = self.find_used_span_from_ptr_check_size(slice.ptr, slice_blocks);
+            std.debug.print("\nAllocator for Free = {d}\nslice ptr = {*}\nslice len = {d}\n", .{ BLOCK_SIZE, slice.ptr, slice.len }); //DEBUG
+            const mem_span = self.find_used_span_from_ptr(slice.ptr, slice_blocks);
             self.free_used_span(mem_span);
             return;
         }
 
-        fn debug_trace_open(self: *const Self, func: []const u8, inputs: []const u8) void { //DEBUG
+        fn SUPER_DEBUG_trace_open(self: *const Self, func: []const u8, inputs: []const u8) void { //DEBUG
+            _ = self;
             if (!DEBUG_STACK_TRACE) return;
             stack_depth += 1;
             const indent = indent_depth(stack_depth);
+            // std.debug.print(
+            //     \\
+            //     \\{0s}╔══ [{1d}] : {2s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+            //     \\{0s}╟─(INPUTS)─
+            //     \\{0s}║{11s}
+            //     \\{0s}╟─(BEFORE)─
+            //     \\{0s}║span_list_idx   = {3d}
+            //     \\{0s}║span_list_len   = {4d}
+            //     \\{0s}║span_list_cap   = {5d}
+            //     \\{0s}║first_free_span = {6d}
+            //     \\{0s}║first_used_span = {7d}
+            //     \\{0s}║first_unas_span = {8d}
+            //     \\{0s}║total_mem_blocks= {9d}
+            //     \\{0s}║free_mem_blocks = {10d}
+            //     \\{0s}║
+            // , .{
+            //     indent,
+            //     BLOCK_SIZE,
+            //     func,
+            //     self.span_list_idx,
+            //     self.span_list_len,
+            //     self.span_list_cap,
+            //     self.first_free_span,
+            //     self.first_used_span,
+            //     self.first_unassigned_span,
+            //     self.total_mem_blocks,
+            //     self.free_mem_blocks,
+            //     inputs,
+            // });
             std.debug.print(
                 \\
                 \\{0s}╔══ [{1d}] : {2s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
                 \\{0s}╟─(INPUTS)─
-                \\{0s}║{11s}
+                \\{0s}║{3s}
                 \\{0s}╟─(BEFORE)─
-                \\{0s}║span_list_idx   = {3d}
-                \\{0s}║span_list_len   = {4d}
-                \\{0s}║span_list_cap   = {5d}
-                \\{0s}║first_free_span = {6d}
-                \\{0s}║first_used_span = {7d}
-                \\{0s}║first_unas_span = {8d}
-                \\{0s}║total_mem_blocks= {9d}
-                \\{0s}║free_mem_blocks = {10d}
                 \\{0s}║
             , .{
                 indent,
                 BLOCK_SIZE,
                 func,
-                self.span_list_idx,
-                self.span_list_len,
-                self.span_list_cap,
-                self.first_free_span,
-                self.first_used_span,
-                self.first_unassigned_span,
-                self.total_mem_blocks,
-                self.free_mem_blocks,
                 inputs,
             });
-            self.check_ll_cycles();
-            // var next_idx = self.first_free_span;
-            // while (next_idx != NO_IDX) {
-            //     std.debug.print("{d} -> ", .{next_idx});
-            //     next_idx = self.span_list[next_idx].next_same_state_ll;
-            // }
-            // next_idx = self.first_used_span;
-            // std.debug.print("\n{0s}║Linked List (used): ", .{indent});
-            // while (next_idx != NO_IDX) {
-            //     std.debug.print("{d} -> ", .{next_idx});
-            //     next_idx = self.span_list[next_idx].next_same_state_ll;
-            // }
-            // next_idx = self.first_unassigned_span;
-            // std.debug.print("\n{0s}║Linked List (unassigned): ", .{indent});
-            // while (next_idx != NO_IDX) {
-            //     std.debug.print("{d} -> ", .{next_idx});
-            //     next_idx = self.span_list[next_idx].next_same_state_ll;
-            // }
+            // const span_1_prev = if (self.span_list_len > 1) self.span_list[1].prev_same_state_ll else 1;
+            // std.debug.print(
+            //     \\
+            //     \\{0s}╔══ [{1d}] : {2s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+            //     \\{0s}╟─(INPUTS)─
+            //     \\{0s}║{3s}
+            //     \\{0s}╟─(BEFORE)─
+            //     \\{0s}║span #1 prev ll = {4d}{5s}
+            //     \\{0s}║first_free_span = {6d}
+            //     \\{0s}║
+            // , .{
+            //     indent,
+            //     BLOCK_SIZE,
+            //     func,
+            //     inputs,
+            //     span_1_prev,
+            //     if (self.span_list_len <= 1) "_doesnt_exist" else "",
+            //     self.first_free_span,
+            // });
         }
 
-        fn debug_trace_extra(_: *const Self, msg: []const u8) void { //DEBUG
+        fn SUPER_DEBUG_trace_extra(self: *const Self, msg: []const u8) void { //DEBUG
+            _ = self;
             if (!DEBUG_STACK_TRACE) return;
             std.debug.print(
                 \\
@@ -1324,92 +1361,58 @@ pub fn define(comptime config: Config) type {
             , .{ indent_depth(stack_depth), msg });
         }
 
-        fn check_ll_cycles(self: *const Self) void { //DEBUG
-            if (self.first_free_span != NO_IDX) {
-                const start = self.first_free_span;
-                // std.debug.print("\nNO_IDX = {d}\nself.first_free_span = {d}\nstart = {d}\nself.span_list_len = {d}\nstart < self.span_list_len = {}", .{
-                //     NO_IDX,
-                //     self.first_free_span,
-                //     start,
-                //     self.span_list_len,
-                //     start < self.span_list_len,
-                // });
-                // debug_assert(start < self.span_list_len, "first_free_span >= span_pool_len");
-                var a = start;
-                var b = self.span_list[start].next_same_state_ll;
-                while (b != NO_IDX) {
-                    a = self.span_list[a].next_same_state_ll;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (b == NO_IDX) break;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (a == b) @panic("free list is cyclic");
-                }
-            }
-            if (self.first_used_span != NO_IDX) {
-                // debug_assert(self.first_used_span < self.span_list_len, "first_used_span >= span_pool_len");
-                const start = self.first_used_span;
-                // std.debug.print("\nNO_IDX = {d}\nself.first_used_span = {d}\nstart = {d}\nself.span_list_len = {d}\nstart < self.span_list_len = {}\n", .{
-                //     NO_IDX,
-                //     self.first_used_span,
-                //     start,
-                //     self.span_list_len,
-                //     start < self.span_list_len,
-                // });
-
-                var a = start;
-                var b = self.span_list[start].next_same_state_ll;
-                while (b != NO_IDX) {
-                    a = self.span_list[a].next_same_state_ll;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (b == NO_IDX) break;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (a == b) @panic("used list is cyclic");
-                }
-            }
-            if (self.first_unassigned_span != NO_IDX) {
-                const start = self.first_unassigned_span;
-                // debug_assert(start < self.span_list_len, "first_unassigned_span >= span_pool_len");
-                var a = start;
-                var b = self.span_list[start].next_same_state_ll;
-                while (b != NO_IDX) {
-                    a = self.span_list[a].next_same_state_ll;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (b == NO_IDX) break;
-                    b = self.span_list[b].next_same_state_ll;
-                    if (a == b) @panic("unassigned list is cyclic");
-                }
-            }
-            return;
-        }
-
-        fn debug_trace_close(self: *const Self, func: []const u8) void { //DEBUG
+        fn SUPER_DEBUG_trace_close(self: *const Self, func: []const u8) void { //DEBUG
+            _ = self;
             if (!DEBUG_STACK_TRACE) return;
-            self.check_ll_cycles();
+            // std.debug.print(
+            //     \\
+            //     \\{0s}╟─(AFTER)─
+            //     \\{0s}║span_list_idx   = {1d}
+            //     \\{0s}║span_list_len   = {2d}
+            //     \\{0s}║span_list_cap   = {3d}
+            //     \\{0s}║first_free_span = {4d}
+            //     \\{0s}║first_used_span = {5d}
+            //     \\{0s}║first_unas_span = {6d}
+            //     \\{0s}║total_mem_blocks= {7d}
+            //     \\{0s}║free_mem_blocks = {8d}
+            //     \\{0s}╚══ [{9d}] : {10s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+            // , .{
+            //     indent_depth(stack_depth),
+            //     self.span_list_idx,
+            //     self.span_list_len,
+            //     self.span_list_cap,
+            //     self.first_free_span,
+            //     self.first_used_span,
+            //     self.first_unassigned_span,
+            //     self.total_mem_blocks,
+            //     self.free_mem_blocks,
+            //     BLOCK_SIZE,
+            //     func,
+            // });
             std.debug.print(
                 \\
                 \\{0s}╟─(AFTER)─
-                \\{0s}║span_list_idx   = {1d}
-                \\{0s}║span_list_len   = {2d}
-                \\{0s}║span_list_cap   = {3d}
-                \\{0s}║first_free_span = {4d}
-                \\{0s}║first_used_span = {5d}
-                \\{0s}║first_unas_span = {6d}
-                \\{0s}║total_mem_blocks= {7d}
-                \\{0s}║free_mem_blocks = {8d}
-                \\{0s}╚══ [{9d}] : {10s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+                \\{0s}╚══ [{1d}] : {2s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
             , .{
                 indent_depth(stack_depth),
-                self.span_list_idx,
-                self.span_list_len,
-                self.span_list_cap,
-                self.first_free_span,
-                self.first_used_span,
-                self.first_unassigned_span,
-                self.total_mem_blocks,
-                self.free_mem_blocks,
                 BLOCK_SIZE,
                 func,
             });
+            // const span_1_prev = if (self.span_list_len > 1) self.span_list[1].prev_same_state_ll else 1;
+            // std.debug.print(
+            //     \\
+            //     \\{0s}╟─(AFTER)─
+            //     \\{0s}║span #1 prev ll = {1d}{2s}
+            //     \\{0s}║first_free_span = {3d}
+            //     \\{0s}╚══ [{4d}] : {5s} ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+            // , .{
+            //     indent_depth(stack_depth),
+            //     span_1_prev,
+            //     if (self.span_list_len <= 1) "_doesnt_exist" else "",
+            //     self.first_free_span,
+            //     BLOCK_SIZE,
+            //     func,
+            // });
             stack_depth -= 1;
         }
 
@@ -1417,18 +1420,28 @@ pub fn define(comptime config: Config) type {
             if (builtin.mode == .Debug) {
                 var error_builder = std.ArrayList(u8).init(std.heap.page_allocator);
                 const PRINT_LL = true;
+                const invert_first_logic = list == .NONE;
                 var should_match = switch (list) {
                     .ASSIGNED_FREE => self.first_free_span,
                     .ASSIGNED_USED => self.first_used_span,
                     .UNASSIGNED => self.first_unassigned_span,
+                    else => self.first_free_span,
                 };
                 var good_match: u8 = 0;
+                var bad_match_c: u8 = 0;
                 if (PRINT_LL) std.fmt.format(error_builder.writer(), "\n{s} List: ", .{@tagName(list)}) catch unreachable;
                 while (should_match != NO_IDX) {
                     if (PRINT_LL) std.fmt.format(error_builder.writer(), "{d}({c}) -> ", .{ should_match, state_char(self.span_list[should_match].state) }) catch unreachable;
-                    if (should_match == idx) {
-                        good_match += 1;
-                        if (good_match == 2) break;
+                    if (invert_first_logic) {
+                        if (should_match == idx) {
+                            bad_match_c += 1;
+                            if (bad_match_c == 2) break;
+                        }
+                    } else {
+                        if (should_match == idx) {
+                            good_match += 1;
+                            if (good_match == 2) break;
+                        }
                     }
                     should_match = self.span_list[should_match].next_same_state_ll;
                 }
@@ -1436,6 +1449,7 @@ pub fn define(comptime config: Config) type {
                     .ASSIGNED_FREE => .{ .a = self.first_used_span, .b = self.first_unassigned_span, .an = @tagName(SpanState.ASSIGNED_USED), .bn = @tagName(SpanState.UNASSIGNED) },
                     .ASSIGNED_USED => .{ .a = self.first_free_span, .b = self.first_unassigned_span, .an = @tagName(SpanState.ASSIGNED_FREE), .bn = @tagName(SpanState.UNASSIGNED) },
                     .UNASSIGNED => .{ .a = self.first_free_span, .b = self.first_used_span, .an = @tagName(SpanState.ASSIGNED_FREE), .bn = @tagName(SpanState.ASSIGNED_USED) },
+                    .NONE => .{ .a = self.first_used_span, .b = self.first_unassigned_span, .an = @tagName(SpanState.ASSIGNED_USED), .bn = @tagName(SpanState.UNASSIGNED) },
                 };
                 var bad_match_a: u8 = 0;
                 if (PRINT_LL) std.fmt.format(error_builder.writer(), "\n{s} List: ", .{other_lists.an}) catch unreachable;
@@ -1474,13 +1488,13 @@ pub fn define(comptime config: Config) type {
                     error_builder.appendSlice("state does not match expected (found ") catch unreachable;
                     std.fmt.format(error_builder.writer(), "{s})", .{@tagName(self.span_list[idx].state)}) catch unreachable;
                 }
-                if (good_match == 0) {
+                if (!invert_first_logic and good_match == 0) {
                     has_error = true;
                     error_builder.appendSlice("\nCheck Idx==List ") catch unreachable;
                     std.fmt.format(error_builder.writer(), "({d}=={s}) ", .{ idx, @tagName(list) }) catch unreachable;
                     error_builder.appendSlice("was not found in the expected list: ") catch unreachable;
                     std.fmt.format(error_builder.writer(), "{s}", .{@tagName(list)}) catch unreachable;
-                } else if (good_match > 1) {
+                } else if (!invert_first_logic and good_match > 1) {
                     has_error = true;
                     error_builder.appendSlice("\nIdx ") catch unreachable;
                     std.fmt.format(error_builder.writer(), "{d} ", .{idx}) catch unreachable;
@@ -1509,6 +1523,20 @@ pub fn define(comptime config: Config) type {
                     std.fmt.format(error_builder.writer(), "{s}", .{other_lists.bn}) catch unreachable;
                 }
                 if (bad_match_b > 1) {
+                    has_error = true;
+                    error_builder.appendSlice("\nCheck Idx==List ") catch unreachable;
+                    std.fmt.format(error_builder.writer(), "({d}=={s}) ", .{ idx, @tagName(list) }) catch unreachable;
+                    error_builder.appendSlice("was found in an UNEXPECTED list MULTIPLE TIMES! (cyclic list): ") catch unreachable;
+                    std.fmt.format(error_builder.writer(), "{s}", .{other_lists.bn}) catch unreachable;
+                }
+                if (bad_match_c > 0) {
+                    has_error = true;
+                    error_builder.appendSlice("\nCheck Idx==List ") catch unreachable;
+                    std.fmt.format(error_builder.writer(), "({d}=={s}) ", .{ idx, @tagName(list) }) catch unreachable;
+                    error_builder.appendSlice("was found in an UNEXPECTED list: ") catch unreachable;
+                    std.fmt.format(error_builder.writer(), "{s}", .{other_lists.bn}) catch unreachable;
+                }
+                if (bad_match_c > 1) {
                     has_error = true;
                     error_builder.appendSlice("\nCheck Idx==List ") catch unreachable;
                     std.fmt.format(error_builder.writer(), "({d}=={s}) ", .{ idx, @tagName(list) }) catch unreachable;
@@ -1582,10 +1610,11 @@ fn indent_depth(depth: usize) []const u8 {
 fn prnt_inpt(comptime fmt: []const u8, args: anytype) []const u8 {
     return std.fmt.bufPrint(&ibuf, fmt, args) catch unreachable;
 }
-const DEBUG_STACK_TRACE = true;
+const DEBUG_STACK_TRACE = false;
 
 fn state_char(state: SpanState) u8 {
     if (state == .ASSIGNED_FREE) return 'F';
     if (state == .ASSIGNED_USED) return 'U';
+    if (state == .UNASSIGNED) return 'X';
     return '_';
 }
