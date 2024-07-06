@@ -93,11 +93,11 @@ test "lexer output" {
         _ = try expected_file.readAll(expected_buffer.slice());
         const produced_file = try Token.create_token_output_file(&lexer_test_folder, produced_name.slice(), &source_manager.stage_list.ptr[source_key].LEXED.token_list);
         defer produced_file.close();
-        break; //DEBUG//HACK
-        // const produced_file_size: u64 = (try produced_file.stat()).size;
-        // _ = produced_buffer.ensure_cap(produced_file_size);
-        // produced_buffer.grow_len_to_cap();
-        // _ = try produced_file.readAll(produced_buffer.slice());
+        const produced_file_size: u64 = (try produced_file.stat()).size;
+        _ = produced_buffer.ensure_cap(produced_file_size);
+        produced_buffer.grow_len_to_cap();
+        _ = try produced_file.readAll(produced_buffer.slice());
+        //FIXME//CHECKPOINT find the infinite loop and fix
         // var produced_reader = SourceReader.new(1, produced_buffer.slice());
         // var expected_reader = SourceReader.new(0, expected_buffer.slice());
         // while (true) {
@@ -142,7 +142,6 @@ test "lexer output" {
         //             produced_name.slice(), p_start_row, p_start_col, expected_reader.data[e_start..e_end], produced_reader.data[p_start..p_end],
         //         });
         //     }
-        //     break; //HACK//DEBUG
         // }
         // const notice_file = try lexer_test_folder.createFile(notices_name.slice(), std.fs.File.CreateFlags{
         //     .read = true,
@@ -150,10 +149,10 @@ test "lexer output" {
         //     .truncate = true,
         // });
         // defer notice_file.close();
-        // var notice_data = try notice_manager.get_notice_list_kinds();
+        // var notice_data = try Global.notice_manager.get_notice_list_kinds();
         // defer notice_data.release();
         // try notice_file.writeAll(notice_data.slice());
-        // notice_manager.clear();
+        // Global.notice_manager.clear();
     }
     // if (lexing_failed or mismatch_list.len > 0) {
     //     std.log.err("\n{s}", .{mismatch_list.slice()});

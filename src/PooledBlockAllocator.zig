@@ -491,7 +491,7 @@ pub fn define(comptime config: Config) type {
         ///
         /// Attempting to release memory still in-use is safety-checked (dependant on setting of Config.safety_checks_panic),
         /// but full release and any applicable memory wiping will still occur before any potential error message or panic.
-        pub fn release_all_memory(self: *Self) void {
+        pub fn release_all_memory(self: *Self, comptime allow_freeing_in_use_memory: bool) void {
             var did_release_used_mem = false;
             var curr_used_span = self.first_used_span;
             while (curr_used_span != NO_IDX) {
@@ -505,12 +505,13 @@ pub fn define(comptime config: Config) type {
             }
             var curr_free_span = self.first_free_span;
             while (curr_free_span != NO_IDX) {
-                if (self.span_list[curr_free_span].prev_logical != NO_IDX or self.span_list[curr_free_span].next_logical != NO_IDX) {
-                    curr_free_span = self.span_list[curr_free_span].next_same_state_ll;
-                    if (curr_free_span == NO_IDX) break;
+                if (curr_free_span != self.span_list_idx and self.span_list[curr_free_span].prev_logical == NO_IDX and self.span_list[curr_free_span].next_logical == NO_IDX) {
+                    debug_assert(self.span_list[curr_free_span].state == .ASSIGNED_FREE, DEBUG_RELEASE_NON_FREE_SPAN);
+                    const total_blocks = self.span_list[curr_free_span].block_len;
+                    const total_bytes = blocks_to_bytes(total_blocks);
+                    self.backing_alloc.rawFree(self.span_list[curr_free_span].mem_ptr[0..total_bytes], LOG2_OF_BLOCK_SIZE, 0);
                 }
-                self.release_span_to_backing_or_os(curr_free_span);
-                curr_used_span = self.first_used_span;
+                curr_free_span = self.span_list[curr_free_span].next_same_state_ll;
             }
             debug_assert(self.first_used_span == self.span_list_idx, "PooledBlockAllocator.release_all_memory: first used block isnt span_list block");
             debug_assert(self.span_list[self.first_used_span].next_same_state_ll == NO_IDX, "PooledBlockAllocator.release_all_memory: last used block isnt span_list block");
@@ -531,7 +532,7 @@ pub fn define(comptime config: Config) type {
                 .free_mem_blocks = 0,
                 .total_mem_blocks = 0,
             };
-            user_assert(!did_release_used_mem, USER_ERROR_RELEASED_USED_MEMORY);
+            user_assert(allow_freeing_in_use_memory or !did_release_used_mem, USER_ERROR_RELEASED_USED_MEMORY);
         }
 
         fn split_free_span(self: *Self, span_idx: T_IDX, first_len: T_IDX) T_IDX_or_OptionalT_IDX {
@@ -1489,6 +1490,38 @@ pub fn define(comptime config: Config) type {
                 if (has_error) {
                     @panic(error_builder.items);
                 }
+            }
+        }
+
+        fn SUPER_DEBUG_print_state(self: *Self) void {
+            if (builtin.mode == .Debug) {
+                var str_builder = std.ArrayList(u8).init(std.heap.page_allocator);
+                std.fmt.format(str_builder.writer(), "\nALLOCATOR = {d}\nspan_list_len = {d}\nspan_list_cap = {d}\nspan_list_idx = {d}\ntotal_blocks = {d}\nfree_blocks = {d}\nFree List: ", .{
+                    BLOCK_SIZE,
+                    self.span_list_len,
+                    self.span_list_cap,
+                    self.span_list_idx,
+                    self.total_mem_blocks,
+                    self.free_mem_blocks,
+                }) catch unreachable;
+                var idx = self.first_free_span;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "{d}({c}) -> ", .{ idx, state_char(self.span_list[idx].state) }) catch unreachable;
+                    idx = self.span_list[idx].next_same_state_ll;
+                }
+                std.fmt.format(str_builder.writer(), "\nUsed List: ", .{}) catch unreachable;
+                idx = self.first_used_span;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "{d}({c}) -> ", .{ idx, state_char(self.span_list[idx].state) }) catch unreachable;
+                    idx = self.span_list[idx].next_same_state_ll;
+                }
+                std.fmt.format(str_builder.writer(), "\nUnassigned List: ", .{}) catch unreachable;
+                idx = self.first_unassigned_span;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "{d}({c}) -> ", .{ idx, state_char(self.span_list[idx].state) }) catch unreachable;
+                    idx = self.span_list[idx].next_same_state_ll;
+                }
+                std.debug.print("{s}", .{str_builder.items});
             }
         }
     };
