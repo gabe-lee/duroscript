@@ -42,10 +42,6 @@ test "lexer output" {
     Global.init(std.heap.page_allocator);
     defer Global.cleanup();
     var source_manager = &Global.source_manager;
-    // var program_rom = &Global.program_rom;
-    // var ident_manager = &Global.ident_manager;
-    // var notice_manager = &Global.notice_manager;
-
     var expected_buffer = Global.U8BufMedium.List.create();
     defer expected_buffer.release();
     var produced_buffer = Global.U8BufMedium.List.create();
@@ -60,7 +56,7 @@ test "lexer output" {
     defer produced_name.release();
     var notices_name = Global.U8BufSmall.List.create();
     defer notices_name.release();
-    // var lexing_failed: bool = false;
+    var lexing_failed: bool = false;
     const lexer_test_folder = try std.fs.cwd().openDir("./test_sources/lexing", OpenDirOptions{
         .access_sub_paths = true,
         .iterate = true,
@@ -90,72 +86,73 @@ test "lexer output" {
         const expected_file_size: u64 = (try expected_file.stat()).size;
         _ = expected_buffer.ensure_cap(expected_file_size);
         expected_buffer.grow_len_to_cap();
-        _ = try expected_file.readAll(expected_buffer.slice());
+        const exp_real_len = try expected_file.readAll(expected_buffer.slice());
+        expected_buffer.set_len_to(exp_real_len);
         const produced_file = try Token.create_token_output_file(&lexer_test_folder, produced_name.slice(), &source_manager.stage_list.ptr[source_key].LEXED.token_list);
         defer produced_file.close();
         const produced_file_size: u64 = (try produced_file.stat()).size;
         _ = produced_buffer.ensure_cap(produced_file_size);
         produced_buffer.grow_len_to_cap();
-        _ = try produced_file.readAll(produced_buffer.slice());
-        //FIXME//CHECKPOINT find the infinite loop and fix
-        // var produced_reader = SourceReader.new(1, produced_buffer.slice());
-        // var expected_reader = SourceReader.new(0, expected_buffer.slice());
-        // while (true) {
-        //     produced_reader.skip_whitespace();
-        //     expected_reader.skip_whitespace();
-        //     if (produced_reader.curr.pos >= produced_reader.data.len and expected_reader.curr.pos >= expected_reader.data.len) {
-        //         break;
-        //     }
-        //     const p_start = produced_reader.curr.pos;
-        //     const e_start = expected_reader.curr.pos;
-        //     const p_start_col = produced_reader.curr.col + 1;
-        //     const p_start_row = produced_reader.curr.row + 1;
-        //     produced_reader.skip_alpha_underscore();
-        //     expected_reader.skip_alpha_underscore();
-        //     if (produced_reader.curr.pos < produced_reader.data.len) {
-        //         const p_next_byte = produced_reader.peek_next_byte();
-        //         if (p_next_byte == ASC.L_PAREN) {
-        //             produced_reader.skip_until_byte_match(ASC.R_PAREN);
-        //         }
-        //     }
-        //     if (expected_reader.curr.pos < expected_reader.data.len) {
-        //         const e_next_byte = expected_reader.peek_next_byte();
-        //         if (e_next_byte == ASC.L_PAREN) {
-        //             expected_reader.skip_until_byte_match(ASC.R_PAREN);
-        //         }
-        //     }
-        //     const p_end = produced_reader.curr.pos;
-        //     const e_end = expected_reader.curr.pos;
-        //     var case_failed = false;
-        //     if (p_end - p_start != e_end - e_start) case_failed = true;
-        //     if (!case_failed) {
-        //         for (produced_reader.data[p_start..p_end], expected_reader.data[e_start..e_end]) |p, e| {
-        //             if (p != e) {
-        //                 case_failed = true;
-        //                 break;
-        //             }
-        //         }
-        //     }
-        //     if (case_failed) {
-        //         lexing_failed = true;
-        //         mismatch_list.append_fmt_string("LEXING TEST FAIL (TOKEN MISMATCH): ./test_sources/lexing/{s}:{d}:{d}\n\tEXP: {s}\n\tGOT: {s}\n", .{
-        //             produced_name.slice(), p_start_row, p_start_col, expected_reader.data[e_start..e_end], produced_reader.data[p_start..p_end],
-        //         });
-        //     }
-        // }
-        // const notice_file = try lexer_test_folder.createFile(notices_name.slice(), std.fs.File.CreateFlags{
-        //     .read = true,
-        //     .exclusive = false,
-        //     .truncate = true,
-        // });
-        // defer notice_file.close();
-        // var notice_data = try Global.notice_manager.get_notice_list_kinds();
-        // defer notice_data.release();
-        // try notice_file.writeAll(notice_data.slice());
-        // Global.notice_manager.clear();
+        const prod_real_len = try produced_file.readAll(produced_buffer.slice());
+        produced_buffer.set_len_to(prod_real_len);
+        var produced_reader = SourceReader.new(source_key, produced_buffer.slice());
+        var expected_reader = SourceReader.new(source_key, expected_buffer.slice());
+        while (true) {
+            produced_reader.skip_whitespace();
+            expected_reader.skip_whitespace();
+            if (produced_reader.curr.pos >= produced_reader.data.len and expected_reader.curr.pos >= expected_reader.data.len) {
+                break;
+            }
+            const p_start = produced_reader.curr.pos;
+            const e_start = expected_reader.curr.pos;
+            const p_start_col = produced_reader.curr.col + 1;
+            const p_start_row = produced_reader.curr.row + 1;
+            produced_reader.skip_alpha_underscore();
+            expected_reader.skip_alpha_underscore();
+            if (produced_reader.curr.pos < produced_reader.data.len) {
+                const p_next_byte = produced_reader.peek_next_byte();
+                if (p_next_byte == ASC.L_PAREN) {
+                    produced_reader.skip_until_byte_match(ASC.R_PAREN);
+                }
+            }
+            if (expected_reader.curr.pos < expected_reader.data.len) {
+                const e_next_byte = expected_reader.peek_next_byte();
+                if (e_next_byte == ASC.L_PAREN) {
+                    expected_reader.skip_until_byte_match(ASC.R_PAREN);
+                }
+            }
+            const p_end = produced_reader.curr.pos;
+            const e_end = expected_reader.curr.pos;
+            var case_failed = false;
+            if (p_end - p_start != e_end - e_start) case_failed = true;
+            if (!case_failed) {
+                for (produced_reader.data[p_start..p_end], expected_reader.data[e_start..e_end]) |p, e| {
+                    if (p != e) {
+                        case_failed = true;
+                        break;
+                    }
+                }
+            }
+            if (case_failed) {
+                lexing_failed = true;
+                mismatch_list.append_fmt_string("LEXING TEST FAIL (TOKEN MISMATCH): ./test_sources/lexing/{s}:{d}:{d}\n\tEXP: {s}\n\tGOT: {s}\n", .{
+                    produced_name.slice(), p_start_row, p_start_col, expected_reader.data[e_start..e_end], produced_reader.data[p_start..p_end],
+                });
+            }
+        }
+        const notice_file = try lexer_test_folder.createFile(notices_name.slice(), std.fs.File.CreateFlags{
+            .read = true,
+            .exclusive = false,
+            .truncate = true,
+        });
+        defer notice_file.close();
+        var notice_data = try Global.notice_manager.get_notice_list_kinds();
+        defer notice_data.release();
+        try notice_file.writeAll(notice_data.slice());
+        Global.notice_manager.clear();
     }
-    // if (lexing_failed or mismatch_list.len > 0) {
-    //     std.log.err("\n{s}", .{mismatch_list.slice()});
-    //     return error.LexingTestFail;
-    // }
+    if (lexing_failed or mismatch_list.len > 0) {
+        std.log.err("\n{s}", .{mismatch_list.slice()});
+        return error.LexingTestFail;
+    }
 }
