@@ -163,7 +163,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                         .len = 0,
                     };
                 }
-                const alloc_len = len_to_alloc_len(min_len);
+                const alloc_len = type_len_to_alloc_len(min_len);
                 const alloc_slice: AllocSlice = @alignCast(alloc.raw_alloc(alloc_len, LOG2_OF_ALIGN, @returnAddress()) orelse unreachable);
                 var new = from_alloc_mem(alloc_slice);
                 if (sentinel) |s| {
@@ -177,6 +177,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// If `len == 0` the pointer references a type-defined const zero-length (with optional sentinel) array
             pub fn create_exact(exact_len: usize) Slice {
                 var new = Slice.create_minimum(exact_len);
+                assert(new.len >= exact_len);
                 new.len = exact_len;
                 if (sentinel) |s| {
                     new.ptr[new.len] = s;
@@ -193,7 +194,7 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             /// For a slice with an exact length, you can re-slice the result, or use
             /// `.resize_exact(exact_len)`
             pub fn resize_minimum(self: *Slice, new_min_len: usize) bool {
-                if (self.len == 0 or self.cap == 0 or self.ptr == BLANK_PTR) {
+                if (self.len == 0 or self.ptr == BLANK_PTR) {
                     if (new_min_len == 0) {
                         return true;
                     }
@@ -205,9 +206,9 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                     return false;
                 }
                 const alloc_mem = self.to_alloc_mem();
-                const new_alloc_len = len_to_alloc_len(new_min_len);
+                const new_alloc_len = type_len_to_alloc_len(new_min_len);
                 if (alloc.raw_resize(alloc_mem, LOG2_OF_ALIGN, new_alloc_len, @returnAddress())) |new_real_len| {
-                    self.len = new_real_len;
+                    self.len = alloc_len_to_type_len(new_real_len);
                     if (sentinel) |s| {
                         self.ptr[self.len] = s;
                     }
@@ -250,9 +251,9 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
                     return false;
                 }
                 const alloc_mem = self.to_alloc_mem();
-                const new_alloc_len = len_to_alloc_len(new_min_len);
+                const new_alloc_len = type_len_to_alloc_len(new_min_len);
                 if (alloc.raw_resize(alloc_mem, LOG2_OF_ALIGN, new_alloc_len, @returnAddress())) |new_real_len| {
-                    self.len = new_real_len;
+                    self.len = alloc_len_to_type_len(new_real_len);
                     if (sentinel) |s| {
                         self.ptr[self.len] = s;
                     }
@@ -303,25 +304,25 @@ pub fn define_with_sentinel_and_align(comptime T: type, comptime sentinel: ?T, c
             }
 
             inline fn to_alloc_mem(self: *Slice) AllocSlice {
-                const byte_ptr: AllocPtr = @ptrCast(self.ptr);
-                return byte_ptr[0..len_to_alloc_len(self.len)];
+                const byte_ptr: AllocPtr = @ptrCast(@alignCast(self.ptr));
+                return byte_ptr[0..type_len_to_alloc_len(self.len)];
             }
 
             inline fn from_alloc_mem(alloc_slice: AllocSlice) Slice {
                 const type_ptr: Ptr = @ptrCast(@alignCast(alloc_slice.ptr));
-                const type_len = len_from_alloc_len(alloc_slice.len);
+                const type_len = alloc_len_to_type_len(alloc_slice.len);
                 return Slice{
                     .ptr = type_ptr,
                     .len = type_len,
                 };
             }
 
-            inline fn len_to_alloc_len(len: usize) usize {
+            inline fn type_len_to_alloc_len(len: usize) usize {
                 const type_len = if (sentinel != null) len + 1 else len;
                 return (type_len * @sizeOf(T));
             }
 
-            inline fn len_from_alloc_len(alloc_len: usize) usize {
+            inline fn alloc_len_to_type_len(alloc_len: usize) usize {
                 const non_sentinel_len = if (sentinel != null) alloc_len - @sizeOf(T) else alloc_len;
                 return (non_sentinel_len / @sizeOf(T));
             }
