@@ -1,5 +1,5 @@
 const ASC = @import("./Unicode.zig").ASCII;
-const TOK = @import("./Token.zig").KIND;
+const TOK = @import("./Token.zig").TOK;
 const std = @import("std");
 const assert = std.debug.assert;
 const SourceReader = @import("./SourceReader.zig");
@@ -59,8 +59,8 @@ pub fn parse_from_string(string: []const u8, comptime is_builtin: bool) IdentPar
     return parse_from_source(&reader, &token, is_builtin);
 }
 
-pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime is_builtin: bool) IdentParseResult {
-    assert(source.data.len > source.curr.pos);
+pub fn parse_from_source(reader: *SourceReader, token: *TokenBuilder, comptime is_builtin: bool) IdentParseResult {
+    assert(reader.data.len > reader.curr.pos);
     var ident_result = IdentParseResult{
         .ident = IdentBlock{
             .data = INNER{ 0, 0, 0, 0, 0, 0 },
@@ -70,14 +70,14 @@ pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime i
     };
     var bit_idx: u8 = if (is_builtin) 6 else 0;
     var int_idx: u8 = 0;
-    const start_pos = source.curr.pos;
-    if (source.data[source.curr.pos] >= ASC._0 and source.data[source.curr.pos] <= ASC._9) {
-        token.attach_notice_here(NOTICE.ident_first_byte_is_digit, SEVERITY.ERROR, source);
+    const start_pos = reader.curr.pos;
+    if (reader.data[reader.curr.pos] >= ASC._0 and reader.data[reader.curr.pos] <= ASC._9) {
+        token.attach_notice_here(NOTICE.ident_first_byte_is_digit, SEVERITY.ERROR, reader);
         token.kind = TOK.ILLEGAL;
         ident_result.illegal = true;
     }
-    while (source.curr.pos < source.data.len) {
-        const byte = source.data[source.curr.pos];
+    while (reader.curr.pos < reader.data.len) {
+        const byte = reader.data[reader.curr.pos];
         const val: u64 = switch (byte) {
             ASC._0...ASC._9 => (byte - ASC._0) + DIGIT_OFFSET,
             ASC.A...ASC.Z => (byte - ASC.A) + UPPER_OFFSET,
@@ -87,10 +87,10 @@ pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime i
                 break;
             },
         };
-        source.curr.advance_one_col(1);
+        reader.curr.advance_one_col(1);
         ident_result.len += 1;
         if (int_idx >= 6) {
-            token.attach_notice_here(NOTICE.ident_too_long, SEVERITY.ERROR, source);
+            token.attach_notice_here(NOTICE.ident_too_long, SEVERITY.ERROR, reader);
             token.kind = TOK.ILLEGAL;
             ident_result.illegal = true;
         } else {
@@ -103,8 +103,8 @@ pub fn parse_from_source(source: *SourceReader, token: *TokenBuilder, comptime i
             bit_idx &= 63;
         }
     }
-    if (source.curr.pos == start_pos) {
-        token.attach_notice_here(NOTICE.expected_identifier_here, SEVERITY.ERROR, source);
+    if (reader.curr.pos == start_pos) {
+        token.attach_notice_here(NOTICE.expected_identifier_here, SEVERITY.ERROR, reader);
         token.kind = TOK.ILLEGAL;
         ident_result.illegal = true;
     }

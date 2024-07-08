@@ -1,7 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const assert = std.debug.assert;
 const List = std.ArrayListUnmanaged;
 const Token = @import("./Token.zig");
-const TOK = Token.KIND;
+const TOK = Token.TOK;
 const SourceLexer = @import("./SourceLexer.zig");
 const OpenFlags = std.fs.File.OpenFlags;
 const CreateFlags = std.fs.File.CreateFlags;
@@ -38,7 +40,7 @@ pub fn main() !void {
 }
 
 test "lexer output" {
-    //CHECKPOINT init and implement source manager
+    assert(builtin.mode == .Debug);
     Global.init(std.heap.page_allocator);
     defer Global.cleanup();
     var source_manager = &Global.source_manager;
@@ -80,6 +82,9 @@ test "lexer output" {
         const complete_path = try lexer_test_folder.realpathAlloc(Global.small_alloc, input_name.slice());
         defer Global.small_alloc.free(complete_path);
         const source_key = source_manager.get_or_create_source_key(complete_path);
+        source_manager.advance_source_to_loaded(source_key);
+        var source_ref = source_manager.stage_list.ptr[source_key].LOADED.source.clone();
+        defer source_ref.release();
         source_manager.advance_source_to_lexed(source_key);
         const expected_file = try lexer_test_folder.openFile(expected_name.slice(), OpenFlags{ .mode = OpenMode.read_only });
         defer expected_file.close();
@@ -97,18 +102,24 @@ test "lexer output" {
         produced_buffer.set_len_to(prod_real_len);
         var produced_reader = SourceReader.new(source_key, produced_buffer.slice());
         var expected_reader = SourceReader.new(source_key, expected_buffer.slice());
+        var token_idx: usize = 0;
         while (true) {
+            // tokens_checked += 1;
             produced_reader.skip_whitespace();
             expected_reader.skip_whitespace();
             if (produced_reader.curr.pos >= produced_reader.data.len and expected_reader.curr.pos >= expected_reader.data.len) {
                 break;
             }
+            // if (tokens_checked == 255) {
+            //     std.debug.print("\nproduced.pos = {d}\nproduced.len = {d}\nexpected.pos = {d}\nexpected.len = {d}\n", .{ produced_reader.curr.pos, produced_reader.data.len, expected_reader.curr.pos, expected_reader.data.len }); //DEBUG
+            //     break;
+            // }
             const p_start = produced_reader.curr.pos;
             const e_start = expected_reader.curr.pos;
             const p_start_col = produced_reader.curr.col + 1;
             const p_start_row = produced_reader.curr.row + 1;
-            produced_reader.skip_alpha_underscore();
-            expected_reader.skip_alpha_underscore();
+            produced_reader.skip_alphanum_underscore();
+            expected_reader.skip_alphanum_underscore();
             if (produced_reader.curr.pos < produced_reader.data.len) {
                 const p_next_byte = produced_reader.peek_next_byte();
                 if (p_next_byte == ASC.L_PAREN) {
@@ -135,10 +146,13 @@ test "lexer output" {
             }
             if (case_failed) {
                 lexing_failed = true;
-                mismatch_list.append_fmt_string("LEXING TEST FAIL (TOKEN MISMATCH): ./test_sources/lexing/{s}:{d}:{d}\n\tEXP: {s}\n\tGOT: {s}\n", .{
-                    produced_name.slice(), p_start_row, p_start_col, expected_reader.data[e_start..e_end], produced_reader.data[p_start..p_end],
+                const source_token: Token = source_manager.stage_list.ptr[source_key].LEXED.token_list.ptr[token_idx];
+                const source_text: []const u8 = source_ref.ptr[source_token.byte_start..source_token.byte_end];
+                mismatch_list.append_fmt_string("LEXING TEST FAIL (TOKEN MISMATCH): ./test_sources/lexing/{s}:{d}:{d}\n\tEXP: {s}\n\tGOT: {s}\n\tSOURCE: `{s}`\n", .{
+                    produced_name.slice(), p_start_row, p_start_col, expected_reader.data[e_start..e_end], produced_reader.data[p_start..p_end], source_text,
                 });
             }
+            token_idx += 1;
         }
         const notice_file = try lexer_test_folder.createFile(notices_name.slice(), std.fs.File.CreateFlags{
             .read = true,

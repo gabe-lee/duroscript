@@ -577,22 +577,14 @@ pub fn define(comptime config: Config) type {
             const next_logical = self.span_list[span_idx].next_logical;
             debug_assert(next_logical == NO_IDX or next_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             if (next_logical != NO_IDX and self.span_list[next_logical].state == .ASSIGNED_FREE) {
-                debug_assert(self.span_list[next_logical].mem_ptr == self.span_list[span_idx].mem_ptr + (@as(usize, self.span_list[span_idx].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
-                self.remove_span_from_its_linked_list(next_logical, .ASSIGNED_FREE);
-                self.span_list[span_idx].next_logical = self.span_list[next_logical].next_logical;
-                self.span_list[span_idx].block_len += self.span_list[next_logical].block_len;
-                self.add_span_to_begining_of_linked_list(next_logical, .UNASSIGNED);
+                self.merge_free_spans(span_idx, next_logical);
             }
             // If prev logical span exists and is also in free state, remove THIS span from the free linked-list, combine its length with prev span,
             // and put it in the unassigned linked-list
             const prev_logical = self.span_list[span_idx].prev_logical;
             debug_assert(prev_logical == NO_IDX or prev_logical < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
             if (prev_logical != NO_IDX and self.span_list[prev_logical].state == .ASSIGNED_FREE) {
-                debug_assert(self.span_list[span_idx].mem_ptr == self.span_list[prev_logical].mem_ptr + (@as(usize, self.span_list[prev_logical].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
-                self.remove_span_from_its_linked_list(span_idx, .ASSIGNED_FREE);
-                self.span_list[prev_logical].next_logical = self.span_list[span_idx].next_logical;
-                self.span_list[prev_logical].block_len += self.span_list[span_idx].block_len;
-                self.add_span_to_begining_of_linked_list(span_idx, .UNASSIGNED);
+                self.merge_free_spans(prev_logical, span_idx);
                 root_free = prev_logical;
             }
             if (allow_auto_shrink) {
@@ -623,6 +615,28 @@ pub fn define(comptime config: Config) type {
                     },
                 }
             }
+        }
+
+        /// Merge 2 logically adjacent free spans
+        ///
+        /// `span_a` must be previous to `span_b`
+        ///
+        /// `span_a` takes over ownership of the `span_b` memory
+        fn merge_free_spans(self: *Self, span_a: T_IDX, span_b: T_IDX) void {
+            debug_assert(span_a < self.span_list_len and span_b < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+            debug_assert(self.span_list[span_a].next_logical == span_b and self.span_list[span_b].prev_logical == span_a, DEBUG_EXPECTED_LOGICAL_ADJACENT_SPANS);
+            debug_assert(self.span_list[span_a].state == .ASSIGNED_FREE and self.span_list[span_b].state == .ASSIGNED_FREE, DEBUG_EXPECTED_LOGICAL_ADJACENT_FREE_SPANS);
+            debug_assert(self.span_list[span_b].mem_ptr == self.span_list[span_a].mem_ptr + (@as(usize, self.span_list[span_a].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
+            const span_c = self.span_list[span_b].next_logical;
+            self.span_list[span_a].next_logical = span_c;
+            if (span_c != NO_IDX) {
+                debug_assert(span_c < self.span_list_len, DEBUG_IDX_OUT_OF_RANGE);
+                debug_assert(self.span_list[span_c].mem_ptr == self.span_list[span_b].mem_ptr + (@as(usize, self.span_list[span_b].block_len) << LOG2_OF_BLOCK_SIZE), DEBUG_LOGICAL_ADJACENT_SPANS_HAVE_DISJOINT_MEM);
+                self.span_list[span_c].prev_logical = span_a;
+            }
+            self.span_list[span_a].block_len += self.span_list[span_b].block_len;
+            self.remove_span_from_its_linked_list(span_b, .ASSIGNED_FREE);
+            self.add_span_to_begining_of_linked_list(span_b, .UNASSIGNED);
         }
 
         fn add_unassigned_span_but_not_to_list(self: *Self) T_IDX {
@@ -861,6 +875,7 @@ pub fn define(comptime config: Config) type {
         fn collect_entire_logical_span_from_last(self: *Self, last_span_idx: T_IDX) MemSpanLogical {
             self.SUPER_DEBUG_trace_open("collect_entire_logical_span_from_last", prnt_inpt("last_span_idx: {d}", .{last_span_idx})); // DEBUG
             defer self.SUPER_DEBUG_trace_close("collect_entire_logical_span_from_last"); // DEBUG
+            // self.SUPER_DEBUG_print_logical_allocation(last_span_idx); //DEBUG
             debug_assert(self.span_list[last_span_idx].next_logical == NO_IDX, DEBUG_COLLECT_LOGICAL_FROM_END_SPAN_WASNT_LAST);
             var total_blocks = self.span_list[last_span_idx].block_len;
             var first_ptr = self.span_list[last_span_idx].mem_ptr;
@@ -1524,6 +1539,58 @@ pub fn define(comptime config: Config) type {
                 std.debug.print("{s}", .{str_builder.items});
             }
         }
+
+        fn SUPER_DEBUG_print_logical_allocation(self: *Self, any_span: T_IDX) void {
+            if (builtin.mode == .Debug) {
+                var str_builder = std.ArrayList(u8).init(std.heap.page_allocator);
+                std.fmt.format(str_builder.writer(), "\nLOGICAL ALLOCATION SPAN # {d} BELONGS TO:\n", .{any_span}) catch unreachable;
+                var idx = any_span;
+                while (true) {
+                    if (self.span_list[idx].prev_logical != NO_IDX) {
+                        idx = self.span_list[idx].prev_logical;
+                    } else {
+                        break;
+                    }
+                }
+                const first_logical = idx;
+                const list_start_pos = str_builder.items.len;
+                var any_span_pos: usize = 0;
+                while (idx != NO_IDX) {
+                    if (idx == any_span) {
+                        any_span_pos = str_builder.items.len - list_start_pos;
+                    }
+                    std.fmt.format(str_builder.writer(), "{d}({c}) -> ", .{ idx, state_char(self.span_list[idx].state) }) catch unreachable;
+                    idx = self.span_list[idx].next_logical;
+                }
+                str_builder.items.len -= 3;
+                str_builder.append('\n') catch unreachable;
+                if (any_span_pos > 0) {
+                    str_builder.appendNTimes(' ', any_span_pos) catch unreachable;
+                }
+                str_builder.appendSlice("^\n") catch unreachable;
+                idx = first_logical;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "{d}B -> ", .{self.span_list[idx].block_len}) catch unreachable;
+                    idx = self.span_list[idx].next_logical;
+                }
+                str_builder.items.len -= 3;
+                str_builder.append('\n') catch unreachable;
+                idx = first_logical;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "+{d} -> ", .{@intFromPtr(self.span_list[idx].mem_ptr) - @intFromPtr(self.span_list[first_logical].mem_ptr)}) catch unreachable;
+                    idx = self.span_list[idx].next_logical;
+                }
+                str_builder.items.len -= 3;
+                str_builder.append('\n') catch unreachable;
+                idx = first_logical;
+                while (idx != NO_IDX) {
+                    std.fmt.format(str_builder.writer(), "{*} -> ", .{self.span_list[idx].mem_ptr}) catch unreachable;
+                    idx = self.span_list[idx].next_logical;
+                }
+
+                std.debug.print("{s}", .{str_builder.items});
+            }
+        }
     };
 }
 
@@ -1566,6 +1633,8 @@ const DEBUG_RELEASE_NON_FREE_SPAN = "PooledBlockAllocator just tried to release 
 const DEBUG_NEXT_LOGICAL_PREV_LOGICAL_DOESNT_MATCH = "PooledBlockAllocator found a span with .next_logical span that had a .prev_logical field that didnt match the current span idx";
 const DEBUG_NEXT_LOGICAL_FREE_ISNT_FREE = "PooledBlockAllocator tried to take blocks from a .next_logical span that was supposed to be free, but it wasn't free";
 const DEBUG_SPAN_WASNT_IN_USED_STATE = "PooledBlockAllocator tried to perform an operation that expected the span_idx to be in the USED state, but it wasn't";
+const DEBUG_EXPECTED_LOGICAL_ADJACENT_SPANS = "PooledBlockAllocator tried to perform an operation on two logical adjacent spans, but one or BOTH spans pointed to a different adjacent logical";
+const DEBUG_EXPECTED_LOGICAL_ADJACENT_FREE_SPANS = "PooledBlockAllocator tried to perform an operation on two logical adjacent FREE spans, but one or BOTH spans weren't free";
 // User Error messages
 const USER_ERROR_SUPPLIED_MEM_SLICE_WASNT_ALLOCATED_FROM_THIS_ALLOCATOR = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate does not exist in this allocator";
 const USER_ERROR_SUPPLIED_MEM_SLICE_LARGER_SIZE_THAN_ORIGINALLY_GIVEN = "the memory slice ([]u8) supplied to this PooledBlockAllocator to free, resize, or reallocate has a larger block-size than was last handed out";

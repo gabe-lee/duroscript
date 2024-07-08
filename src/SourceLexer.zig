@@ -1,8 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const List = std.ArrayListUnmanaged;
 const Token = @import("./Token.zig");
-const TOK = Token.KIND;
+const TOK = Token.TOK;
 const UNI = @import("./Unicode.zig");
 const ASC = UNI.ASCII;
 const F64 = @import("./Constants.zig").F64;
@@ -18,6 +19,7 @@ const Notice = NoticeManager.Notice;
 const IdentManager = @import("./IdentManager.zig");
 const ParseInteger = @import("./ParseInteger.zig");
 const SourceManager = @import("./SourceManager.zig");
+
 const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
 
@@ -68,33 +70,14 @@ pub fn next_token(self: *Self) Token {
     const byte_1 = self.reader.read_next_ascii(token);
     switch (byte_1) {
         ASC.COLON => return self.finish_token_kind(TOK.COLON, token),
-        ASC.AT_SIGN => return self.finish_token_kind(TOK.REFERENCE, token),
+        // ASC.AT_SIGN => return self.finish_token_kind(TOK.REFERENCE, token),
         ASC.COMMA => return self.finish_token_kind(TOK.COMMA, token),
         ASC.SEMICOL => return self.finish_token_kind(TOK.SEMICOL, token),
         ASC.L_PAREN => return self.finish_token_kind(TOK.L_PAREN, token),
         ASC.R_PAREN => return self.finish_token_kind(TOK.R_PAREN, token),
         ASC.L_CURLY => return self.finish_token_kind(TOK.L_CURLY, token),
         ASC.R_CURLY => return self.finish_token_kind(TOK.R_CURLY, token),
-        ASC.L_SQUARE => {
-            if (self.reader.data.len > self.reader.curr.pos) {
-                const byte_2 = self.reader.read_next_ascii(token);
-                switch (byte_2) {
-                    ASC.R_SQUARE => return self.finish_token_kind(TOK.SLICE, token),
-                    ASC.PLUS => {
-                        if (self.reader.data.len > self.reader.curr.pos) {
-                            const byte_3 = self.reader.read_next_ascii(token);
-                            switch (byte_3) {
-                                ASC.R_SQUARE => return self.finish_token_kind(TOK.LIST, token),
-                                else => self.reader.rollback_position(),
-                            }
-                        }
-                        return self.finish_token_generic_illegal(token);
-                    },
-                    else => self.reader.rollback_position(),
-                }
-            }
-            return self.finish_token_kind(TOK.L_SQUARE, token);
-        },
+        ASC.L_SQUARE => return self.finish_token_kind(TOK.L_SQUARE, token),
         ASC.R_SQUARE => return self.finish_token_kind(TOK.R_SQUARE, token),
         ASC.QUESTION => return self.finish_token_kind(TOK.MAYBE_NONE, token),
         ASC.PERIOD => {
@@ -112,7 +95,7 @@ pub fn next_token(self: *Self) Token {
                         }
                         return self.finish_token_generic_illegal(token);
                     },
-                    ASC.AT_SIGN => return self.finish_token_kind(TOK.DEREREFENCE, token),
+                    ASC.ASTERISK => return self.finish_token_kind(TOK.DEREREFENCE, token),
                     ASC.QUESTION => return self.finish_token_kind(TOK.ACCESS_MAYBE_NONE, token),
                     else => self.reader.rollback_position(),
                 }
@@ -206,16 +189,6 @@ pub fn next_token(self: *Self) Token {
                 const byte_2 = self.reader.read_next_ascii(token);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.MULT_ASSIGN, token),
-                    ASC.ASTERISK => {
-                        if (self.reader.data.len > self.reader.curr.pos) {
-                            const byte_3 = self.reader.read_next_ascii(token);
-                            switch (byte_3) {
-                                ASC.EQUALS => return self.finish_token_kind(TOK.POWER_ASSIGN, token),
-                                else => self.reader.rollback_position(),
-                            }
-                        }
-                        return self.finish_token_kind(TOK.POWER, token);
-                    },
                     else => self.reader.rollback_position(),
                 }
             }
@@ -226,16 +199,6 @@ pub fn next_token(self: *Self) Token {
                 const byte_2 = self.reader.read_next_ascii(token);
                 switch (byte_2) {
                     ASC.EQUALS => return self.finish_token_kind(TOK.DIV_ASSIGN, token),
-                    ASC.F_SLASH => {
-                        if (self.reader.data.len > self.reader.curr.pos) {
-                            const byte_3 = self.reader.read_next_ascii(token);
-                            switch (byte_3) {
-                                ASC.EQUALS => return self.finish_token_kind(TOK.ROOT_ASSIGN, token),
-                                else => self.reader.rollback_position(),
-                            }
-                        }
-                        return self.finish_token_kind(TOK.ROOT, token);
-                    },
                     else => self.reader.rollback_position(),
                 }
             }
@@ -266,10 +229,14 @@ pub fn next_token(self: *Self) Token {
                         }
                         return self.finish_token_kind(TOK.LOGIC_AND, token);
                     },
+                    ASC.SPACE, ASC.NEWLINE, ASC.CR, ASC.H_TAB => {
+                        self.reader.rollback_position();
+                        return self.finish_token_kind(TOK.BIT_AND, token);
+                    },
                     else => self.reader.rollback_position(),
                 }
             }
-            return self.finish_token_kind(TOK.BIT_AND, token);
+            return self.finish_token_kind(TOK.REFERENCE, token);
         },
         ASC.PIPE => {
             if (self.reader.data.len > self.reader.curr.pos) {
@@ -337,7 +304,9 @@ pub fn next_token(self: *Self) Token {
             const ident_start = self.reader.curr.pos;
             const ident_result = IdentBlock.parse_from_source(&self.reader, token, false);
             const ident_end = self.reader.curr.pos;
-            if (token.kind == TOK.ILLEGAL) return self.finish_token(token);
+            if (ident_result.illegal) {
+                return self.finish_token_generic_illegal(token);
+            }
             if (ident_result.len <= Token.LONGEST_KEYWORD) {
                 for (Token.KW_U64_SLICES_BY_LEN[ident_result.len], Token.KW_TOKEN_SLICES_BY_LEN[ident_result.len], Token.KW_IMPLICIT_SLICES_BY_LEN[ident_result.len]) |keyword, kind, implicit| {
                     if (ident_result.ident.data[0] == keyword) {
@@ -499,6 +468,8 @@ fn finish_token(self: *Self, token: *TokenBuilder) Token {
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
         .data_extra = token.data_extra,
+        .byte_start = if (builtin.mode == .Debug) token.start_loc.pos else void{},
+        .byte_end = if (builtin.mode == .Debug) self.reader.curr.pos else void{},
     };
 }
 
@@ -517,6 +488,8 @@ fn finish_token_kind(self: *Self, kind: TOK, token: *TokenBuilder) Token {
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
         .data_extra = token.data_extra,
+        .byte_start = if (builtin.mode == .Debug) token.start_loc.pos else void{},
+        .byte_end = if (builtin.mode == .Debug) self.reader.curr.pos else void{},
     };
 }
 
@@ -535,6 +508,8 @@ fn finish_token_generic_illegal(self: *Self, token: *TokenBuilder) Token {
         .data_val_or_ptr = token.data_val_or_ptr,
         .data_len = token.data_len,
         .data_extra = token.data_extra,
+        .byte_start = if (builtin.mode == .Debug) token.start_loc.pos else void{},
+        .byte_end = if (builtin.mode == .Debug) self.reader.curr.pos else void{},
     };
 }
 

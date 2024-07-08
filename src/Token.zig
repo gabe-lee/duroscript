@@ -1,6 +1,7 @@
 // const A = @import("./Ascii.zig");
 const IdentBlock = @import("./IdentBlock.zig");
 const std = @import("std");
+const builtin = @import("builtin");
 const ProgramROM = @import("./ProgramROM.zig");
 const NOTICE = @import("./NoticeManager.zig").SEVERITY;
 const SourceReader = @import("./SourceReader.zig");
@@ -14,7 +15,7 @@ pub const TokenBuf = StaticAllocBuffer.define(Self, &Global.medium_block_alloc);
 
 const Self = @This();
 
-kind: KIND,
+kind: TOK,
 source_key: u16,
 row_start: u32,
 row_end: u32,
@@ -23,8 +24,10 @@ col_end: u32,
 data_val_or_ptr: u64,
 data_len: u32,
 data_extra: u8,
+byte_start: if (builtin.mode == .Debug) usize else void,
+byte_end: if (builtin.mode == .Debug) usize else void,
 
-pub const KIND = enum(u8) {
+pub const TOK = enum(u8) {
     // Meta
     EOF, // TL
     COMMENT, // TL
@@ -34,7 +37,7 @@ pub const KIND = enum(u8) {
     CONST, // TL
     VAR, // TL
     IDENT, // TL
-    DEFAULT, // TL
+    IGNORE, // TL
     AS, // TL
     // Types
     NONE, // TL
@@ -54,6 +57,9 @@ pub const KIND = enum(u8) {
     TEMPLATE, // TL
     STRUCT, // TL
     SLICE, // TL
+    MAP, // TL
+    ARRAY, // TL
+    PACKED, // TL
     LIST, // TL
     ENUM, // TL
     FLAGS, // TL
@@ -143,68 +149,70 @@ pub const KIND = enum(u8) {
 };
 
 pub const LONGEST_KEYWORD = 8;
-const KW_TUPLE_1 = struct { id: *const [1:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_2 = struct { id: *const [2:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_3 = struct { id: *const [3:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_4 = struct { id: *const [4:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_5 = struct { id: *const [5:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_6 = struct { id: *const [6:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_7 = struct { id: *const [7:0]u8, k: KIND, v: u64 };
-const KW_TUPLE_8 = struct { id: *const [8:0]u8, k: KIND, v: u64 };
+const KW_TUPLE_1 = struct { id: *const [1:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_2 = struct { id: *const [2:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_3 = struct { id: *const [3:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_4 = struct { id: *const [4:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_5 = struct { id: *const [5:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_6 = struct { id: *const [6:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_7 = struct { id: *const [7:0]u8, k: TOK, v: u64 };
+const KW_TUPLE_8 = struct { id: *const [8:0]u8, k: TOK, v: u64 };
 
 pub const KW_TABLE_1 = [_]KW_TUPLE_1{
-    .{ .id = "_", .k = KIND.DEFAULT, .v = 0 },
+    .{ .id = "_", .k = TOK.IGNORE, .v = 0 },
 };
 pub const KW_TABLE_2 = [_]KW_TUPLE_2{
-    .{ .id = "as", .k = KIND.AS, .v = 0 },
-    .{ .id = "in", .k = KIND.IN, .v = 0 },
-    .{ .id = "u8", .k = KIND.U8, .v = 0 },
-    .{ .id = "i8", .k = KIND.I8, .v = 0 },
-    .{ .id = "if", .k = KIND.IF, .v = 0 },
+    .{ .id = "as", .k = TOK.AS, .v = 0 },
+    .{ .id = "in", .k = TOK.IN, .v = 0 },
+    .{ .id = "u8", .k = TOK.U8, .v = 0 },
+    .{ .id = "i8", .k = TOK.I8, .v = 0 },
+    .{ .id = "if", .k = TOK.IF, .v = 0 },
 };
 pub const KW_TABLE_3 = [_]KW_TUPLE_3{
-    .{ .id = "var", .k = KIND.VAR, .v = 0 },
-    .{ .id = "std", .k = KIND.STDLIB, .v = 0 },
-    .{ .id = "u16", .k = KIND.U16, .v = 0 },
-    .{ .id = "i16", .k = KIND.I16, .v = 0 },
-    .{ .id = "u32", .k = KIND.U32, .v = 0 },
-    .{ .id = "i32", .k = KIND.I32, .v = 0 },
-    .{ .id = "u64", .k = KIND.U64, .v = 0 },
-    .{ .id = "i64", .k = KIND.I64, .v = 0 },
-    .{ .id = "f32", .k = KIND.F32, .v = 0 },
-    .{ .id = "f64", .k = KIND.F64, .v = 0 },
+    .{ .id = "var", .k = TOK.VAR, .v = 0 },
+    .{ .id = "u16", .k = TOK.U16, .v = 0 },
+    .{ .id = "i16", .k = TOK.I16, .v = 0 },
+    .{ .id = "u32", .k = TOK.U32, .v = 0 },
+    .{ .id = "i32", .k = TOK.I32, .v = 0 },
+    .{ .id = "u64", .k = TOK.U64, .v = 0 },
+    .{ .id = "i64", .k = TOK.I64, .v = 0 },
+    .{ .id = "f32", .k = TOK.F32, .v = 0 },
+    .{ .id = "f64", .k = TOK.F64, .v = 0 },
+    .{ .id = "map", .k = TOK.MAP, .v = 0 },
 };
 pub const KW_TABLE_4 = [_]KW_TUPLE_4{
-    .{ .id = "func", .k = KIND.FUNC, .v = 0 },
-    .{ .id = "bool", .k = KIND.BOOL, .v = 0 },
-    .{ .id = "type", .k = KIND.TYPE, .v = 0 },
-    .{ .id = "true", .k = KIND.LIT_BOOL, .v = 1 },
-    .{ .id = "none", .k = KIND.NONE, .v = 0 },
-    .{ .id = "enum", .k = KIND.ENUM, .v = 0 },
-    .{ .id = "else", .k = KIND.ELSE, .v = 0 },
+    .{ .id = "func", .k = TOK.FUNC, .v = 0 },
+    .{ .id = "bool", .k = TOK.BOOL, .v = 0 },
+    .{ .id = "type", .k = TOK.TYPE, .v = 0 },
+    .{ .id = "true", .k = TOK.LIT_BOOL, .v = 1 },
+    .{ .id = "none", .k = TOK.NONE, .v = 0 },
+    .{ .id = "enum", .k = TOK.ENUM, .v = 0 },
+    .{ .id = "else", .k = TOK.ELSE, .v = 0 },
 };
 pub const KW_TABLE_5 = [_]KW_TUPLE_5{
-    .{ .id = "const", .k = KIND.CONST, .v = 0 },
-    .{ .id = "while", .k = KIND.WHILE, .v = 0 },
-    .{ .id = "break", .k = KIND.BREAK, .v = 0 },
-    .{ .id = "false", .k = KIND.LIT_BOOL, .v = 0 },
-    .{ .id = "union", .k = KIND.UNION, .v = 0 },
-    .{ .id = "tuple", .k = KIND.TUPLE, .v = 0 },
-    .{ .id = "match", .k = KIND.MATCH, .v = 0 },
-    .{ .id = "flags", .k = KIND.FLAGS, .v = 0 },
+    .{ .id = "const", .k = TOK.CONST, .v = 0 },
+    .{ .id = "while", .k = TOK.WHILE, .v = 0 },
+    .{ .id = "break", .k = TOK.BREAK, .v = 0 },
+    .{ .id = "false", .k = TOK.LIT_BOOL, .v = 0 },
+    .{ .id = "union", .k = TOK.UNION, .v = 0 },
+    .{ .id = "tuple", .k = TOK.TUPLE, .v = 0 },
+    .{ .id = "match", .k = TOK.MATCH, .v = 0 },
+    .{ .id = "flags", .k = TOK.FLAGS, .v = 0 },
+    .{ .id = "slice", .k = TOK.SLICE, .v = 0 },
+    .{ .id = "array", .k = TOK.ARRAY, .v = 0 },
 };
 pub const KW_TABLE_6 = [_]KW_TUPLE_6{
-    .{ .id = "import", .k = KIND.IMPORT, .v = 0 },
-    .{ .id = "return", .k = KIND.RETURN, .v = 0 },
-    .{ .id = "struct", .k = KIND.STRUCT, .v = 0 },
-    .{ .id = "string", .k = KIND.STRING, .v = 0 },
+    .{ .id = "import", .k = TOK.IMPORT, .v = 0 },
+    .{ .id = "return", .k = TOK.RETURN, .v = 0 },
+    .{ .id = "struct", .k = TOK.STRUCT, .v = 0 },
+    .{ .id = "string", .k = TOK.STRING, .v = 0 },
 };
 pub const KW_TABLE_7 = [_]KW_TUPLE_7{
-    .{ .id = "foreach", .k = KIND.FOR_EACH, .v = 0 },
+    .{ .id = "foreach", .k = TOK.FOR_EACH, .v = 0 },
 };
 pub const KW_TABLE_8 = [_]KW_TUPLE_8{
-    .{ .id = "nextloop", .k = KIND.NEXT_LOOP, .v = 0 },
-    .{ .id = "template", .k = KIND.TEMPLATE, .v = 0 },
+    .{ .id = "nextloop", .k = TOK.NEXT_LOOP, .v = 0 },
+    .{ .id = "template", .k = TOK.TEMPLATE, .v = 0 },
 };
 
 pub const TOTAL_KW_COUNT = KW_TABLE_1.len + KW_TABLE_2.len + KW_TABLE_3.len + KW_TABLE_4.len + KW_TABLE_5.len + KW_TABLE_6.len + KW_TABLE_7.len + KW_TABLE_8.len;
@@ -272,8 +280,8 @@ pub const KW_U64_TABLE: [TOTAL_KW_COUNT]u64 = eval: {
     break :eval out;
 };
 
-pub const KW_TOKEN_TABLE: [TOTAL_KW_COUNT]KIND = eval: {
-    var out: [TOTAL_KW_COUNT]KIND = undefined;
+pub const KW_TOKEN_TABLE: [TOTAL_KW_COUNT]TOK = eval: {
+    var out: [TOTAL_KW_COUNT]TOK = undefined;
     var i = 0;
     for (KW_TABLE_1) |kw| {
         out[i] = kw.k;
@@ -358,7 +366,7 @@ pub const KW_U64_SLICES_BY_LEN = [9][]const u64{
     KW_U64_TABLE[KW_SLICE_7_START..KW_SLICE_8_START], // 7 char slice
     KW_U64_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
 };
-pub const KW_TOKEN_SLICES_BY_LEN = [9][]const KIND{
+pub const KW_TOKEN_SLICES_BY_LEN = [9][]const TOK{
     KW_TOKEN_TABLE[0..0], // 0 char slice
     KW_TOKEN_TABLE[KW_SLICE_1_START..KW_SLICE_2_START], // 1 char slice
     KW_TOKEN_TABLE[KW_SLICE_2_START..KW_SLICE_3_START], // 2 char slice
@@ -381,13 +389,13 @@ pub const KW_IMPLICIT_SLICES_BY_LEN = [9][]const u64{
     KW_IMPLICIT_TABLE[KW_SLICE_8_START..KW_SLICE_8_END], // 8 char slice
 };
 
-pub const KIND_NAME: [@typeInfo(KIND).Enum.fields.len][]const u8 = compute: {
-    var table: [@typeInfo(KIND).Enum.fields.len][]const u8 = undefined;
-    for (@typeInfo(KIND).Enum.fields, 0..) |f, i| {
-        table[i] = f.name;
-    }
-    break :compute table;
-};
+// pub const KIND_NAME: [@typeInfo(TOK).Enum.fields.len][]const u8 = compute: {
+//     var table: [@typeInfo(TOK).Enum.fields.len][]const u8 = undefined;
+//     for (@typeInfo(TOK).Enum.fields, 0..) |f, i| {
+//         table[i] = f.name;
+//     }
+//     break :compute table;
+// };
 
 pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8, tokens: *TokenBuf.Slice) !std.fs.File {
     const out_file = try working_dir.createFile(path, std.fs.File.CreateFlags{
@@ -399,13 +407,13 @@ pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8
     var string_builder = Global.U8BufSmall.List.create();
     defer string_builder.release();
     for (tokens.slice()) |token| {
-        const name = KIND_NAME[@intFromEnum(token.kind)];
+        const name = @tagName(token.kind);
         while (token.row_start > row) {
             row += 1;
             _ = try out_file.write("\n");
         }
         switch (token.kind) {
-            KIND.LIT_INTEGER,
+            TOK.LIT_INTEGER,
             => {
                 if (token.data_extra == 1) { // negative
                     _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, -@as(i64, @bitCast(token.data_val_or_ptr)) }));
@@ -413,16 +421,16 @@ pub fn create_token_output_file(working_dir: *const std.fs.Dir, path: []const u8
                     _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, token.data_val_or_ptr }));
                 }
             },
-            KIND.LIT_FLOAT => {
+            TOK.LIT_FLOAT => {
                 _ = try out_file.write(string_builder.quick_fmt_string("{s}({d}) ", .{ name, @as(f64, @bitCast(token.data_val_or_ptr)) }));
             },
-            KIND.LIT_BOOL => {
+            TOK.LIT_BOOL => {
                 _ = try out_file.write(string_builder.quick_fmt_string("{s}({any}) ", .{ name, @as(bool, @bitCast(@as(u1, @truncate(token.data_val_or_ptr)))) }));
             },
-            KIND.LIT_STRING, KIND.LIT_STR_TEMPLATE => {
+            TOK.LIT_STRING, TOK.LIT_STR_TEMPLATE => {
                 _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.token_rom.data.ptr[token.data_val_or_ptr .. token.data_val_or_ptr + token.data_len] }));
             },
-            KIND.IDENT => {
+            TOK.IDENT => {
                 const ident_loc = Global.ident_manager.ident_name_locs.ptr[token.data_val_or_ptr];
                 _ = try out_file.write(string_builder.quick_fmt_string("{s}({s}) ", .{ name, Global.ident_manager.ident_buffer.ptr[ident_loc.start..ident_loc.end] }));
             },

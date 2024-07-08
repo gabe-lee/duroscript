@@ -4,7 +4,7 @@ const UNI = @import("./Unicode.zig");
 const U = UNI;
 const ASC = UNI.ASCII;
 const TokenBuilder = @import("./SourceLexer.zig").TokenBuilder;
-const TOK = @import("./Token.zig").KIND;
+const TOK = @import("./Token.zig").TOK;
 const NoticeManager = @import("./NoticeManager.zig");
 const SEVERITY = NoticeManager.SEVERITY;
 const NOTICE = NoticeManager.KIND;
@@ -106,12 +106,12 @@ pub fn skip_until_byte_match(self: *Self, comptime match_byte: u8) void {
     return;
 }
 
-pub fn skip_alpha_underscore(self: *Self) void {
+pub fn skip_alphanum_underscore(self: *Self) void {
     self.rolled_back_to_prev = false;
     while (self.data.len > self.curr.pos) {
         const byte = self.data[self.curr.pos];
         switch (byte) {
-            ASC.A...ASC.Z, ASC.a...ASC.z, ASC.UNDERSCORE => {
+            ASC.A...ASC.Z, ASC.a...ASC.z, ASC._0...ASC._9, ASC.UNDERSCORE => {
                 self.curr.pos += 1;
                 self.curr.col += 1;
             },

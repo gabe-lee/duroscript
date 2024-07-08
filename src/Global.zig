@@ -89,9 +89,9 @@ pub fn cleanup() void {
     Self.token_rom.cleanup();
     Self.notice_manager.cleanup();
     Self.ident_manager.cleanup();
-    Self.small_alloc_concrete.release_all_memory(true);
-    Self.medium_alloc_concrete.release_all_memory(true);
-    Self.large_alloc_concrete.release_all_memory(true);
+    Self.small_alloc_concrete.release_all_memory(false);
+    Self.medium_alloc_concrete.release_all_memory(false);
+    Self.large_alloc_concrete.release_all_memory(false);
 }
 
 pub const U8BufSmall = StaticAllocBuffer.define(u8, &Self.small_block_alloc);

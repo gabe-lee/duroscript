@@ -1,6 +1,6 @@
 const std = @import("std");
 const SourceReader = @import("./SourceReader.zig");
-const TOK = @import("./Token.zig").KIND;
+const TOK = @import("./Token.zig").TOK;
 const ASC = @import("./Unicode.zig").ASCII;
 const NoticeManager = @import("./NoticeManager.zig");
 const NOTICE = NoticeManager.KIND;
